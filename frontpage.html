@@ -19,12 +19,18 @@
         };
     </script>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="style.css" />
+    <style>
+        .excel-grid,
+        .excel-grid th,
+        .excel-grid td {
+            border: 1px solid #3f4654;
+        }
+    </style>
 </head>
 <body class="bg-[#0b0d11] text-stone-100 min-h-screen antialiased">
     <!-- Top Bar -->
     <header class="sticky top-0 z-30 border-b border-stone-800 bg-[#0b0d11]/95 backdrop-blur">
-        <div class="max-w-[1600px] mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+        <div class="max-w-[1680px] mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-3">
                 <div class="w-8 h-8 rounded-lg bg-amber-400 text-stone-950 font-mono font-bold flex items-center justify-center text-xs">
                     PM
@@ -34,12 +40,15 @@
                         MOULD PREVENTIVE MAINTENANCE PLAN NOVEMBER - 2026
                     </h1>
                     <p class="text-[11px] font-mono text-stone-400">
-                        Click any date cell under a Tool Number to toggle <span class="text-emerald-300 font-bold">P</span> (Plan)
+                        Excel Grid (70 Tools) • Click Date cell to toggle <span class="text-emerald-300 font-bold">P</span> • Click Tool No to edit
                     </p>
                 </div>
             </div>
 
             <div class="flex flex-wrap items-center gap-2 text-xs font-mono">
+                <span id="tool-count-badge" class="px-2.5 py-1.5 rounded-lg bg-[#181d28] border border-stone-700 text-sky-300 font-bold">
+                    70 Tools
+                </span>
                 <input
                     id="month-picker"
                     type="month"
@@ -49,7 +58,7 @@
                 <input
                     id="tool-search-input"
                     type="text"
-                    placeholder="Search Tool No..."
+                    placeholder="Search Tool No / Sr..."
                     class="bg-[#181d28] border border-stone-700 rounded-lg px-2.5 py-1.5 text-white placeholder-stone-500"
                 />
                 <button
@@ -57,16 +66,24 @@
                     type="button"
                     class="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-stone-950 font-bold"
                 >
-                    + Add Tool
+                    + Add / Set Tool
                 </button>
             </div>
         </div>
     </header>
 
-    <main class="max-w-[1600px] mx-auto px-4 py-4 space-y-4">
-        <!-- Quick Add Tool Form -->
+    <main class="max-w-[1680px] mx-auto px-4 py-4 space-y-4">
+        <!-- Add or Assign Tool into 70-Tool Sheet -->
         <section id="add-tool-panel" class="hidden rounded-2xl bg-[#11151d] border border-amber-400/40 p-4">
-            <form id="add-tool-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+            <form id="add-tool-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
+                <input
+                    id="new-tool-sr"
+                    type="number"
+                    min="1"
+                    max="70"
+                    placeholder="Sr. No (1-70)"
+                    class="bg-[#0b0d11] border border-stone-700 rounded-lg px-3 py-2 text-xs font-mono text-sky-300"
+                />
                 <input
                     id="new-tool-number"
                     type="text"
@@ -92,40 +109,40 @@
                     type="submit"
                     class="bg-emerald-400 hover:bg-emerald-300 text-stone-950 font-mono font-bold text-xs rounded-lg px-4 py-2"
                 >
-                    Add to Plan
+                    Save Tool
                 </button>
             </form>
         </section>
 
-        <!-- Sheet Matrix Container -->
-        <section class="rounded-2xl bg-[#11151d] border-2 border-stone-700 overflow-hidden shadow-xl">
-            <div class="overflow-x-auto">
-                <table class="w-full border-collapse text-xs font-mono">
-                    <thead>
-                        <tr class="border-b-2 border-stone-600 bg-[#151a24] text-stone-100">
-                            <th class="sticky left-0 z-20 bg-[#151a24] py-2.5 px-2.5 border-r border-stone-700 text-center w-12">
+        <!-- Excel-Style Row/Column Matrix Sheet -->
+        <section class="rounded-2xl bg-[#11151d] border-2 border-stone-600 overflow-hidden shadow-xl">
+            <div class="overflow-x-auto max-h-[72vh]">
+                <table class="excel-grid w-full border-collapse text-xs font-mono">
+                    <thead class="sticky top-0 z-20">
+                        <tr class="bg-[#151a24] text-stone-100">
+                            <th class="sticky left-0 z-30 bg-[#151a24] py-2.5 px-2 text-center w-14">
                                 Sr. No
                             </th>
-                            <th class="sticky left-12 z-20 bg-[#151a24] py-2.5 px-3 border-r-2 border-stone-600 text-left min-w-[210px]">
+                            <th class="sticky left-14 z-30 bg-[#151a24] py-2.5 px-3 text-left min-w-[220px]">
                                 TOOL NUMBER
                             </th>
                             <th id="date-headers-slot" colspan="30" class="py-2 px-2 text-center text-amber-300 tracking-wider">
                                 DATES
                             </th>
                         </tr>
-                        <tr id="pm-date-header-row" class="border-b-2 border-stone-600 bg-[#0d1017] text-[10px] text-stone-300">
-                            <th class="sticky left-0 z-20 bg-[#0d1017] border-r border-stone-800"></th>
-                            <th class="sticky left-12 z-20 bg-[#0d1017] border-r-2 border-stone-600 px-3 py-1.5 text-left text-stone-400">
+                        <tr id="pm-date-header-row" class="bg-[#0d1017] text-[10px] text-stone-200">
+                            <th class="sticky left-0 z-30 bg-[#0d1017] text-center py-1.5 text-stone-400">#</th>
+                            <th class="sticky left-14 z-30 bg-[#0d1017] px-3 py-1.5 text-left text-stone-400">
                                 Mould Code
                             </th>
                         </tr>
                     </thead>
-                    <tbody id="pm-matrix-tbody" class="divide-y divide-stone-800"></tbody>
+                    <tbody id="pm-matrix-tbody"></tbody>
                 </table>
             </div>
 
             <!-- Footer Sign-off (Prepared By / Approved By) -->
-            <div class="px-5 py-4 border-t-2 border-stone-700 bg-[#0d1017] grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
+            <div class="px-5 py-4 border-t-2 border-stone-600 bg-[#0d1017] grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
                 <div class="flex items-center gap-2">
                     <span class="text-stone-400 shrink-0">Prepared By :</span>
                     <input
@@ -150,7 +167,6 @@
 
     <div id="toast" class="fixed bottom-5 right-5 z-50 translate-y-20 opacity-0 pointer-events-none transition-all duration-300 rounded-xl bg-stone-900 border border-amber-400/50 px-4 py-2.5 text-xs font-mono text-amber-200"></div>
 
-    <script src="shared.js"></script>
-    <script src="script.js"></script>
+    <script src="frontpage.js"></script>
 </body>
 </html>

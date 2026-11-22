@@ -2,12 +2,17 @@ const MONTHS_UPPER = [
     "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
     "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"
 ];
-const MONTHS_TITLE = [
+const MONTHS_SHORT = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 ];
 
-const DEFAULT_TOOLS = [
+const TOTAL_PM_TOOLS = 70;
+const ROSTER_STORAGE_KEY = "ToolSyncPM_70_Roster_v2";
+const CELLS_STORAGE_KEY = "ToolSyncPM_Matrix_Cells_v2";
+const SHARED_TOOLS_MIRROR_KEY = "ToolSyncPM_Tools_v1";
+
+const INITIAL_30_TOOLS = [
     "145W410441-00202",
     "145W410461-00201",
     "145W410441-00207",
@@ -40,28 +45,136 @@ const DEFAULT_TOOLS = [
     "145W330160-00027"
 ];
 
+function escapeAttr(str) {
+    return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+function showToast(msg) {
+    const el = document.getElementById("toast");
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.remove("translate-y-20", "opacity-0");
+    el.classList.add("translate-y-0", "opacity-100");
+    clearTimeout(window.__toastTimer);
+    window.__toastTimer = setTimeout(() => {
+        el.classList.remove("translate-y-0", "opacity-100");
+        el.classList.add("translate-y-20", "opacity-0");
+    }, 2200);
+}
+
+function createDefault70Roster() {
+    const list = [];
+    for (let i = 1; i <= TOTAL_PM_TOOLS; i++) {
+        list.push(INITIAL_30_TOOLS[i - 1] || `TOOL-${String(i).padStart(3, "0")}`);
+    }
+    return list;
+}
+
+function loadRoster() {
+    const defaults = createDefault70Roster();
+    try {
+        const raw = localStorage.getItem(ROSTER_STORAGE_KEY);
+        if (!raw) return defaults;
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr) || !arr.length) return defaults;
+        const out = [];
+        for (let i = 0; i < TOTAL_PM_TOOLS; i++) {
+            const val = String(arr[i] ?? defaults[i]).trim().toUpperCase();
+            out.push(val || defaults[i]);
+        }
+        return out;
+    } catch {
+        return defaults;
+    }
+}
+
+function saveRoster(roster) {
+    try {
+        localStorage.setItem(ROSTER_STORAGE_KEY, JSON.stringify(roster.slice(0, TOTAL_PM_TOOLS)));
+    } catch {
+        // Ignore storage errors
+    }
+}
+
+function loadCellsMap() {
+    try {
+        const raw = localStorage.getItem(CELLS_STORAGE_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object") return parsed;
+        }
+    } catch {
+        // Ignore storage errors
+    }
+
+    // Seed initial marks from existing localStorage mirror if present
+    const seeded = {};
+    try {
+        const mirror = JSON.parse(localStorage.getItem(SHARED_TOOLS_MIRROR_KEY) || "[]");
+        if (Array.isArray(mirror)) {
+            mirror.forEach((item) => {
+                if (item && item.toolCode && item.scheduledDate) {
+                    const key = `${String(item.toolCode).trim().toUpperCase()}__${String(item.scheduledDate).trim()}`;
+                    seeded[key] = String(item.pmMark || "P").trim().toUpperCase() || "P";
+                }
+            });
+        }
+    } catch {
+        // Ignore mirror read errors
+    }
+    return seeded;
+}
+
+function saveCellsMap(mapObj) {
+    try {
+        localStorage.setItem(CELLS_STORAGE_KEY, JSON.stringify(mapObj));
+        const mirrorList = Object.entries(mapObj).map(([key, mark]) => {
+            const [toolCode, scheduledDate] = key.split("__");
+            return {
+                id: `fp_${toolCode}_${scheduledDate}`,
+                toolCode,
+                scheduledDate,
+                pmMark: mark || "P",
+                status: "Scheduled",
+                remarks: ""
+            };
+        });
+        localStorage.setItem(SHARED_TOOLS_MIRROR_KEY, JSON.stringify(mirrorList));
+    } catch {
+        // Ignore storage errors
+    }
+}
+
 let activeYear = 2026;
-let activeMonthIdx = 10; // November (0-indexed)
-let toolsList = [];
-let breakdownsList = [];
-let pmPlanRecords = [];
+let activeMonthIdx = 10; // November
+let roster70 = loadRoster();
+let cellsMap = loadCellsMap();
 
-function getDaysInMonth(year, monthIndex) {
-    return new Date(year, monthIndex + 1, 0).getDate();
+function getDaysInMonth(year, monthIdx) {
+    return new Date(year, monthIdx + 1, 0).getDate();
 }
 
-function buildIsoDate(year, monthIndex, day) {
-    return `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+function makeIsoDate(year, monthIdx, day) {
+    return `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function updateSheetTitle() {
+function updateHeaderTitle() {
     const titleEl = document.getElementById("sheet-main-title");
     if (titleEl) {
         titleEl.textContent = `MOULD PREVENTIVE MAINTENANCE PLAN ${MONTHS_UPPER[activeMonthIdx]} - ${activeYear}`;
     }
+    const badgeEl = document.getElementById("tool-count-badge");
+    if (badgeEl) {
+        badgeEl.textContent = `${roster70.length} Tools`;
+    }
 }
 
-function renderDateHeaders() {
+function renderDateColumns() {
     const headerRow = document.getElementById("pm-date-header-row");
     const slotTh = document.getElementById("date-headers-slot");
     if (!headerRow || !slotTh) return;
@@ -69,52 +182,42 @@ function renderDateHeaders() {
     const totalDays = getDaysInMonth(activeYear, activeMonthIdx);
     slotTh.colSpan = totalDays;
 
-    const baseCells = `
-        <th class="sticky left-0 z-20 bg-[#0d1017] border-r border-stone-800"></th>
-        <th class="sticky left-12 z-20 bg-[#0d1017] border-r-2 border-stone-600 px-3 py-1.5 text-left text-stone-400">
+    const prefixCols = `
+        <th class="sticky left-0 z-30 bg-[#0d1017] text-center py-1.5 text-stone-400">#</th>
+        <th class="sticky left-14 z-30 bg-[#0d1017] px-3 py-1.5 text-left text-stone-400">
             Mould Code
         </th>
     `;
 
-    const dayCells = [];
+    const dateCols = [];
     for (let d = 1; d <= totalDays; d++) {
-        dayCells.push(`
-            <th class="py-1.5 px-1 border-r border-stone-800 text-center min-w-[38px] whitespace-nowrap">
-                ${d}/${MONTHS_TITLE[activeMonthIdx]}
+        dateCols.push(`
+            <th class="py-1.5 px-1 text-center min-w-[42px] whitespace-nowrap">
+                ${d}/${MONTHS_SHORT[activeMonthIdx]}
             </th>
         `);
     }
 
-    headerRow.innerHTML = baseCells + dayCells.join("");
+    headerRow.innerHTML = prefixCols + dateCols.join("");
 }
 
-function getUniqueToolCodes() {
-    const searchQ = (document.getElementById("tool-search-input")?.value || "").trim().toLowerCase();
-    const seen = new Set();
-    const ordered = [];
-
-    const addCode = (raw) => {
-        const clean = String(raw || "").trim().toUpperCase();
-        if (!clean || seen.has(clean)) return;
-        seen.add(clean);
-        ordered.push(clean);
-    };
-
-    DEFAULT_TOOLS.forEach(addCode);
-    pmPlanRecords.forEach((rec) => addCode(rec.toolCode));
-
-    if (!searchQ) return ordered;
-    return ordered.filter((code) => code.toLowerCase().includes(searchQ));
+function getFilteredRosterRows() {
+    const q = (document.getElementById("tool-search-input")?.value || "").trim().toLowerCase();
+    const rows = roster70.map((code, i) => ({ srNo: i + 1, code }));
+    if (!q) return rows;
+    return rows.filter(
+        (r) => String(r.srNo) === q || r.code.toLowerCase().includes(q)
+    );
 }
 
-function renderMatrixBody() {
+function renderExcelGrid() {
     const tbody = document.getElementById("pm-matrix-tbody");
     if (!tbody) return;
 
     const totalDays = getDaysInMonth(activeYear, activeMonthIdx);
-    const codes = getUniqueToolCodes();
+    const rows = getFilteredRosterRows();
 
-    if (!codes.length) {
+    if (!rows.length) {
         tbody.innerHTML = `
             <tr>
                 <td colspan="${totalDays + 2}" class="py-6 text-center text-stone-400">
@@ -125,101 +228,114 @@ function renderMatrixBody() {
         return;
     }
 
-    tbody.innerHTML = codes
-        .map((code, index) => {
-            const cells = [];
+    tbody.innerHTML = rows
+        .map(({ srNo, code }) => {
+            const dateCells = [];
             for (let d = 1; d <= totalDays; d++) {
-                const iso = buildIsoDate(activeYear, activeMonthIdx, d);
-                const match = pmPlanRecords.find(
-                    (rec) => rec.toolCode === code && rec.scheduledDate === iso
-                );
-                const mark = match ? (match.pmMark || "P") : "";
-                const activeCls = mark
+                const iso = makeIsoDate(activeYear, activeMonthIdx, d);
+                const cellKey = `${code}__${iso}`;
+                const mark = cellsMap[cellKey] || "";
+                const activeStyle = mark
                     ? "bg-emerald-500/20 text-emerald-300 font-bold"
-                    : "text-stone-500 hover:bg-stone-800/70";
+                    : "bg-[#11151d] text-stone-500 hover:bg-stone-800/80";
 
-                cells.push(`
-                    <td class="p-0 border-r border-stone-800/80 text-center">
+                dateCells.push(`
+                    <td class="p-0 text-center ${activeStyle}">
                         <button
                             type="button"
-                            onclick="togglePlanCell('${escapeHtmlAttr(code)}', '${iso}')"
-                            class="w-full h-8 flex items-center justify-center text-[11px] font-bold transition ${activeCls}"
-                            title="${code} — ${iso}"
+                            onclick="toggleMatrixCell('${escapeAttr(code)}', '${iso}')"
+                            class="w-full h-8 flex items-center justify-center text-[11px] font-bold"
+                            title="Sr ${srNo} | ${code} | ${iso}"
                         >
-                            ${mark}
+                            ${escapeAttr(mark)}
                         </button>
                     </td>
                 `);
             }
 
             return `
-                <tr class="hover:bg-stone-900/40">
-                    <td class="sticky left-0 z-10 bg-[#11151d] py-1.5 px-2 border-r border-stone-800 text-center text-stone-400">
-                        ${index + 1}
+                <tr>
+                    <td class="sticky left-0 z-10 bg-[#11151d] py-1.5 px-2 text-center text-stone-400">
+                        ${srNo}
                     </td>
-                    <td class="sticky left-12 z-10 bg-[#11151d] py-1.5 px-3 border-r-2 border-stone-600 font-bold text-stone-100 whitespace-nowrap">
-                        ${code}
+                    <td class="sticky left-14 z-10 bg-[#11151d] py-1.5 px-3 font-bold text-stone-100 whitespace-nowrap">
+                        <button
+                            type="button"
+                            onclick="editRosterTool(${srNo - 1})"
+                            class="text-left hover:text-amber-300 w-full truncate"
+                            title="Click to edit Tool Number #${srNo}"
+                        >
+                            ${escapeAttr(code)}
+                        </button>
                     </td>
-                    ${cells.join("")}
+                    ${dateCells.join("")}
                 </tr>
             `;
         })
         .join("");
 }
 
-window.togglePlanCell = async function (toolCode, isoDate) {
-    const existingIdx = pmPlanRecords.findIndex(
-        (rec) => rec.toolCode === toolCode && rec.scheduledDate === isoDate
-    );
-
-    if (existingIdx > -1) {
-        const existing = pmPlanRecords[existingIdx];
-        pmPlanRecords.splice(existingIdx, 1);
-        toolsList = toolsList.filter((t) => t.id !== existing.id);
-        await deleteByIdFromStore(STORE_TOOLS, existing.id);
-        writeLocalStorageMirror(toolsList, breakdownsList);
-        renderMatrixBody();
-        showToast(`Removed PM plan for ${toolCode} on ${isoDate}`);
-        return;
+window.toggleMatrixCell = function (toolCode, isoDate) {
+    const key = `${toolCode}__${isoDate}`;
+    if (cellsMap[key]) {
+        delete cellsMap[key];
+        saveCellsMap(cellsMap);
+        renderExcelGrid();
+        showToast(`Cleared mark for ${toolCode} (${isoDate})`);
+    } else {
+        cellsMap[key] = "P";
+        saveCellsMap(cellsMap);
+        renderExcelGrid();
+        showToast(`Marked P for ${toolCode} (${isoDate})`);
     }
-
-    const newRec = {
-        id: `pm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        toolCode,
-        scheduledDate: isoDate,
-        pmMark: "P",
-        status: "Scheduled",
-        remarks: ""
-    };
-
-    pmPlanRecords.push(newRec);
-    toolsList.push(newRec);
-    await putToStore(STORE_TOOLS, newRec);
-    writeLocalStorageMirror(toolsList, breakdownsList);
-    renderMatrixBody();
-    showToast(`Marked P for ${toolCode} on ${isoDate}`);
 };
 
-function loadSignOffMeta() {
-    const prepInput = document.getElementById("prepared-by-input");
-    const appInput = document.getElementById("approved-by-input");
-    const metaKey = `ToolSyncPM_SheetMeta_${activeYear}-${String(activeMonthIdx + 1).padStart(2, "0")}`;
+window.editRosterTool = function (index) {
+    if (index < 0 || index >= roster70.length) return;
+    const current = roster70[index];
+    const entered = window.prompt(`Enter Tool Number for Sr. No ${index + 1}:`, current);
+    if (entered === null) return;
+
+    const clean = entered.trim().toUpperCase();
+    if (!clean || clean === current) return;
+
+    // Migrate any existing cell marks from old code to new code
+    Object.keys(cellsMap).forEach((k) => {
+        if (k.startsWith(`${current}__`)) {
+            const datePart = k.split("__")[1];
+            const markVal = cellsMap[k];
+            delete cellsMap[k];
+            cellsMap[`${clean}__${datePart}`] = markVal;
+        }
+    });
+
+    roster70[index] = clean;
+    saveRoster(roster70);
+    saveCellsMap(cellsMap);
+    renderExcelGrid();
+    showToast(`Sr #${index + 1} updated to ${clean}`);
+};
+
+function bindSignOff() {
+    const prepEl = document.getElementById("prepared-by-input");
+    const appEl = document.getElementById("approved-by-input");
+    const key = `ToolSyncPM_SignOff_${activeYear}-${String(activeMonthIdx + 1).padStart(2, "0")}`;
 
     try {
-        const saved = JSON.parse(localStorage.getItem(metaKey) || "{}");
-        if (prepInput) prepInput.value = saved.preparedBy || "";
-        if (appInput) appInput.value = saved.approvedBy || "";
+        const data = JSON.parse(localStorage.getItem(key) || "{}");
+        if (prepEl) prepEl.value = data.preparedBy || "";
+        if (appEl) appEl.value = data.approvedBy || "";
     } catch {
         // Ignore storage read errors
     }
 
-    const saveMeta = () => {
+    const saveSignOff = () => {
         try {
             localStorage.setItem(
-                metaKey,
+                key,
                 JSON.stringify({
-                    preparedBy: prepInput?.value.trim() || "",
-                    approvedBy: appInput?.value.trim() || ""
+                    preparedBy: prepEl?.value.trim() || "",
+                    approvedBy: appEl?.value.trim() || ""
                 })
             );
         } catch {
@@ -227,20 +343,27 @@ function loadSignOffMeta() {
         }
     };
 
-    prepInput?.addEventListener("input", saveMeta);
-    appInput?.addEventListener("input", saveMeta);
+    if (prepEl) prepEl.oninput = saveSignOff;
+    if (appEl) appEl.oninput = saveSignOff;
 }
 
-async function initFrontPage() {
-    const loaded = await loadAllAppData();
-    toolsList = loaded.tools || [];
-    breakdownsList = loaded.breakdowns || [];
-    pmPlanRecords = toolsList.filter((item) => item && item.toolCode && item.scheduledDate);
+function initFrontPageGrid() {
+    // Place any saved tool codes from cellsMap into empty TOOL-xxx slots if not already present
+    Object.keys(cellsMap).forEach((k) => {
+        const code = (k.split("__")[0] || "").trim().toUpperCase();
+        if (code && !roster70.includes(code)) {
+            const slotIdx = roster70.findIndex((c) => /^TOOL-\d{3}$/.test(c));
+            if (slotIdx !== -1) {
+                roster70[slotIdx] = code;
+            }
+        }
+    });
+    saveRoster(roster70);
 
-    updateSheetTitle();
-    renderDateHeaders();
-    renderMatrixBody();
-    loadSignOffMeta();
+    updateHeaderTitle();
+    renderDateColumns();
+    renderExcelGrid();
+    bindSignOff();
 
     document.getElementById("month-picker")?.addEventListener("change", (e) => {
         const val = e.target.value;
@@ -248,45 +371,37 @@ async function initFrontPage() {
         const [yStr, mStr] = val.split("-");
         activeYear = Number(yStr);
         activeMonthIdx = Number(mStr) - 1;
-        updateSheetTitle();
-        renderDateHeaders();
-        renderMatrixBody();
-        loadSignOffMeta();
+        updateHeaderTitle();
+        renderDateColumns();
+        renderExcelGrid();
+        bindSignOff();
     });
 
-    document.getElementById("tool-search-input")?.addEventListener("input", renderMatrixBody);
+    document.getElementById("tool-search-input")?.addEventListener("input", renderExcelGrid);
 
     document.getElementById("toggle-add-tool-btn")?.addEventListener("click", () => {
         document.getElementById("add-tool-panel")?.classList.toggle("hidden");
     });
 
-    document.getElementById("add-tool-form")?.addEventListener("submit", async (e) => {
+    document.getElementById("add-tool-form")?.addEventListener("submit", (e) => {
         e.preventDefault();
-        const codeVal = document.getElementById("new-tool-number")?.value.trim().toUpperCase();
-        const dateVal = document.getElementById("new-tool-pm-date")?.value || buildIsoDate(activeYear, activeMonthIdx, 1);
+        const srVal = Number(document.getElementById("new-tool-sr")?.value);
+        const toolVal = document.getElementById("new-tool-number")?.value.trim().toUpperCase();
+        const dateVal = document.getElementById("new-tool-pm-date")?.value || makeIsoDate(activeYear, activeMonthIdx, 1);
         const markVal = (document.getElementById("new-tool-mark")?.value || "P").trim().toUpperCase() || "P";
 
-        if (!codeVal) return;
+        if (!toolVal) return;
 
-        if (!DEFAULT_TOOLS.includes(codeVal)) {
-            DEFAULT_TOOLS.push(codeVal);
+        if (srVal >= 1 && srVal <= TOTAL_PM_TOOLS) {
+            roster70[srVal - 1] = toolVal;
+        } else if (!roster70.includes(toolVal)) {
+            const emptyIdx = roster70.findIndex((c) => /^TOOL-\d{3}$/.test(c));
+            roster70[emptyIdx !== -1 ? emptyIdx : TOTAL_PM_TOOLS - 1] = toolVal;
         }
 
-        const exists = pmPlanRecords.find((r) => r.toolCode === codeVal && r.scheduledDate === dateVal);
-        if (!exists) {
-            const rec = {
-                id: `pm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-                toolCode: codeVal,
-                scheduledDate: dateVal,
-                pmMark: markVal,
-                status: "Scheduled",
-                remarks: ""
-            };
-            pmPlanRecords.push(rec);
-            toolsList.push(rec);
-            await putToStore(STORE_TOOLS, rec);
-            writeLocalStorageMirror(toolsList, breakdownsList);
-        }
+        cellsMap[`${toolVal}__${dateVal}`] = markVal;
+        saveRoster(roster70);
+        saveCellsMap(cellsMap);
 
         const [dy, dm] = dateVal.split("-").map(Number);
         if (dy && dm) {
@@ -297,11 +412,13 @@ async function initFrontPage() {
         }
 
         document.getElementById("new-tool-number").value = "";
-        updateSheetTitle();
-        renderDateHeaders();
-        renderMatrixBody();
-        showToast(`Added ${codeVal} (${markVal}) on ${dateVal}`);
+        document.getElementById("new-tool-sr").value = "";
+        updateHeaderTitle();
+        renderDateColumns();
+        renderExcelGrid();
+        bindSignOff();
+        showToast(`Saved ${toolVal} (${markVal}) on ${dateVal}`);
     });
 }
 
-initFrontPage();
+initFrontPageGrid();
