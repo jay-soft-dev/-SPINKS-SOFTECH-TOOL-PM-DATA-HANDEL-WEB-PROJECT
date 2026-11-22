@@ -503,26 +503,18 @@ function ensureToolInMonthRoster(toolCode, year, monthIdx) {
     }
 }
 
+function clampDayToMonth(year, monthIdx, dayNum) {
+    const maxDay = getDaysInMonth(year, monthIdx);
+    const safeDay = Math.min(Math.max(Number(dayNum) || 1, 1), maxDay);
+    return makeIsoDate(year, monthIdx, safeDay);
+}
+
 function applyAssignmentsToMatrix(assignments, clearOldP) {
     if (!Array.isArray(assignments) || !assignments.length) return 0;
 
-    let firstIso = "";
-    assignments.forEach(({ isoDate }) => {
-        if (!firstIso && isoDate) firstIso = isoDate;
-    });
-
-    let targetYear = activeYear;
-    let targetMonthIdx = activeMonthIdx;
-    if (firstIso) {
-        const [yStr, mStr] = firstIso.split("-");
-        const y = Number(yStr);
-        const mIdx = Number(mStr) - 1;
-        if (y && mIdx >= 0 && mIdx <= 11) {
-            targetYear = y;
-            targetMonthIdx = mIdx;
-        }
-    }
-
+    // Keep user's selected month/year locked so applying a plan never jumps back to November
+    const targetYear = activeYear;
+    const targetMonthIdx = activeMonthIdx;
     const targetMonthPrefix = `${getMonthKey(targetYear, targetMonthIdx)}-`;
 
     if (clearOldP) {
@@ -541,13 +533,13 @@ function applyAssignmentsToMatrix(assignments, clearOldP) {
 
     assignments.forEach(({ isoDate, toolCode }) => {
         if (!isoDate || !toolCode) return;
-        const [iy, im] = isoDate.split("-").map(Number);
-        const entryYear = iy || targetYear;
-        const entryMonthIdx = im ? im - 1 : targetMonthIdx;
+        const parts = isoDate.split("-");
+        const dayNum = parts.length === 3 ? Number(parts[2]) : 1;
+        const effectiveIsoDate = clampDayToMonth(targetYear, targetMonthIdx, dayNum);
 
-        ensureToolInMonthRoster(toolCode, entryYear, entryMonthIdx);
+        ensureToolInMonthRoster(toolCode, targetYear, targetMonthIdx);
 
-        const key = `${toolCode}__${isoDate}`;
+        const key = `${toolCode}__${effectiveIsoDate}`;
         const existing = matrixState[key] || {
             p: false,
             a: false,
@@ -560,10 +552,7 @@ function applyAssignmentsToMatrix(assignments, clearOldP) {
         appliedCount += 1;
     });
 
-    activeYear = targetYear;
-    activeMonthIdx = targetMonthIdx;
     syncMonthPickerValue();
-
     saveMonthRosterMap(monthRosterMap);
     syncBackupAndMirror(matrixState);
     updateHeaderTitle();
@@ -1523,7 +1512,7 @@ function initFrontPageGrid() {
             return;
         }
         const count = applyAssignmentsToMatrix(assignments, clearOldP);
-        showToast(`Fixed & applied ${count} [P] entries to PM Plan`);
+        showToast(`Fixed & applied ${count} [P] entries in ${MONTHS_SHORT[activeMonthIdx]} ${activeYear}`);
     });
 
     document.getElementById("toggle-bulk-plan-btn")?.addEventListener("click", () => {
@@ -1533,10 +1522,11 @@ function initFrontPageGrid() {
     document.getElementById("sample-bulk-plan-btn")?.addEventListener("click", () => {
         const ta = document.getElementById("bulk-plan-textarea");
         if (!ta) return;
+        const mLabel = MONTHS_SHORT[activeMonthIdx];
         ta.value = [
-            "2/Nov: TOOL-001, TOOL-002, TOOL-003",
-            "3/Nov: TOOL-004, TOOL-005, TOOL-006",
-            "4/Nov: TOOL-007, TOOL-008, TOOL-009"
+            `2/${mLabel}: TOOL-001, TOOL-002, TOOL-003`,
+            `3/${mLabel}: TOOL-004, TOOL-005, TOOL-006`,
+            `4/${mLabel}: TOOL-007, TOOL-008, TOOL-009`
         ].join("\n");
     });
 
@@ -1549,7 +1539,7 @@ function initFrontPageGrid() {
             return;
         }
         const count = applyAssignmentsToMatrix(assignments, clearOldP);
-        showToast(`Applied ${count} date-wise [P] entries`);
+        showToast(`Applied ${count} date-wise [P] entries in ${MONTHS_SHORT[activeMonthIdx]} ${activeYear}`);
     });
 
     document.getElementById("export-excel-btn")?.addEventListener("click", exportPmSheetToExcelWithPics);
