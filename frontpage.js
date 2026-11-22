@@ -123,15 +123,6 @@ function saveExchangeMap(mapObj) {
     }
 }
 
-/**
- * matrixState[key] = {
- *   p: boolean,
- *   a: boolean,
- *   beforePhoto: string,
- *   afterPhoto: string,
- *   remark: string
- * }
- */
 function loadMatrixState() {
     try {
         const raw = localStorage.getItem(MATRIX_STATE_KEY);
@@ -265,6 +256,305 @@ function makeIsoDate(year, monthIdx, day) {
     return `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+function parseDateTokenToIso(token, fallbackYear, fallbackMonthIdx) {
+    const clean = String(token || "").trim();
+    if (!clean) return "";
+
+    const isoMatch = clean.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+    if (isoMatch) {
+        const y = Number(isoMatch[1]);
+        const m = Number(isoMatch[2]);
+        const d = Number(isoMatch[3]);
+        if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+            return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        }
+    }
+
+    const monthTokenMatch = clean.match(/^(\d{1,2})\s*[-/]\s*([a-zA-Z]+)(?:\s*[-/]\s*(\d{4}))?$/);
+    if (monthTokenMatch) {
+        const day = Number(monthTokenMatch[1]);
+        const mName = monthTokenMatch[2].toLowerCase();
+        const year = monthTokenMatch[3] ? Number(monthTokenMatch[3]) : fallbackYear;
+
+        const shortIdx = MONTHS_SHORT.findIndex((s) => s.toLowerCase() === mName.slice(0, 3));
+        const longIdx = MONTHS_UPPER.findIndex((u) => u.toLowerCase() === mName.toLowerCase());
+        const mIdx = shortIdx !== -1 ? shortIdx : longIdx;
+
+        if (mIdx !== -1 && day >= 1 && day <= 31) {
+            return makeIsoDate(year, mIdx, day);
+        }
+    }
+
+    const dmMatch = clean.match(/^(\d{1,2})\s*[-/]\s*(\d{1,2})(?:\s*[-/]\s*(\d{4}))?$/);
+    if (dmMatch) {
+        const day = Number(dmMatch[1]);
+        const monthNum = Number(dmMatch[2]);
+        const year = dmMatch[3] ? Number(dmMatch[3]) : fallbackYear;
+        if (monthNum >= 1 && monthNum <= 12 && day >= 1 && day <= 31) {
+            return `${year}-${String(monthNum).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        }
+    }
+
+    return "";
+}
+
+function formatIsoToShortDate(isoDate) {
+    const parts = String(isoDate || "").split("-");
+    if (parts.length !== 3) return isoDate;
+    const day = Number(parts[2]);
+    const mIdx = Number(parts[1]) - 1;
+    const mLabel = MONTHS_SHORT[mIdx] || parts[1];
+    return `${day}/${mLabel}`;
+}
+
+function arrangeOcrTextToDateAndSr(rawOcrText) {
+    const lines = String(rawOcrText || "")
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+    const groupedByDate = new Map();
+    let currentIsoDate = "";
+
+    const addEntry = (isoDate, srNo, toolCode) => {
+        if (!isoDate) return;
+        let resolvedCode = String(toolCode || "").trim().toUpperCase();
+        let resolvedSr = Number(srNo) || 0;
+
+        if (!resolvedCode && resolvedSr >= 1 && resolvedSr <= roster70.length) {
+            resolvedCode = roster70[resolvedSr - 1];
+        } else if (resolvedCode && !resolvedSr) {
+            const foundIdx = roster70.findIndex((c) => c === resolvedCode);
+            if (foundIdx !== -1) resolvedSr = foundIdx + 1;
+        }
+
+        if (!resolvedCode) return;
+
+        if (!groupedByDate.has(isoDate)) {
+            groupedByDate.set(isoDate, []);
+        }
+        const bucket = groupedByDate.get(isoDate);
+        if (!bucket.some((x) => x.toolCode === resolvedCode)) {
+            bucket.push({ srNo: resolvedSr || 9999, toolCode: resolvedCode });
+        }
+    };
+
+    lines.forEach((line) => {
+        const dateMatches = [
+            ...line.matchAll(
+                /\b(\d{1,2}\s*[-/]\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*|\d{4}-\d{2}-\d{2})\b/gi
+            )
+        ];
+        if (dateMatches.length) {
+            const firstDateIso = parseDateTokenToIso(dateMatches[0][1], activeYear, activeMonthIdx);
+            if (firstDateIso) currentIsoDate = firstDateIso;
+        }
+
+        const toolMatches = [...line.matchAll(/\b(?:\d{5,6}[A-Z0-9-]*|\d{6}-\d{3}(?:\s+OLD)?)\b/gi)];
+        if (toolMatches.length && currentIsoDate) {
+            toolMatches.forEach((tm) => {
+                addEntry(currentIsoDate, 0, tm[0].trim().toUpperCase());
+            });
+            return;
+        }
+
+        if (currentIsoDate && /\bp\b/i.test(line)) {
+            const srMatch = line.match(/\b([1-6]?\d|70)\b/);
+            if (srMatch) {
+                addEntry(currentIsoDate, Number(srMatch[1]), "");
+            }
+        }
+    });
+
+    const sortedDates = [...groupedByDate.keys()].sort();
+    const formattedLines = [];
+    const resolvedAssignments = [];
+
+    sortedDates.forEach((isoDate) => {
+        const items = groupedByDate.get(isoDate) || [];
+        items.sort((a, b) => a.srNo - b.srNo || a.toolCode.localeCompare(b.toolCode));
+
+        const labels = items.map((it) => {
+            resolvedAssignments.push({ isoDate, toolCode: it.toolCode, srNo: it.srNo });
+            return it.srNo && it.srNo < 9999 ? `Sr ${it.srNo} (${it.toolCode})` : it.toolCode;
+        });
+
+        if (labels.length) {
+            formattedLines.push(`${formatIsoToShortDate(isoDate)}: ${labels.join(", ")}`);
+        }
+    });
+
+    return {
+        arrangedText: formattedLines.join("\n"),
+        assignments: resolvedAssignments
+    };
+}
+
+function parseArrangedOrBulkAssignments(text) {
+    const lines = String(text || "")
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+    const out = [];
+    let currentDate = "";
+
+    lines.forEach((line) => {
+        const colonIdx = line.indexOf(":");
+        if (colonIdx !== -1) {
+            const left = line.slice(0, colonIdx).trim();
+            const right = line.slice(colonIdx + 1).trim();
+            const parsedDate = parseDateTokenToIso(left, activeYear, activeMonthIdx);
+            if (parsedDate) {
+                currentDate = parsedDate;
+                right.split(/[,;|]+/).forEach((part) => {
+                    const p = part.trim();
+                    if (!p) return;
+                    const parenMatch = p.match(/\(([^)]+)\)/);
+                    if (parenMatch) {
+                        out.push({ isoDate: currentDate, toolCode: parenMatch[1].trim().toUpperCase() });
+                        return;
+                    }
+                    const srOnlyMatch = p.match(/^sr\.?\s*(\d{1,2})$/i);
+                    if (srOnlyMatch) {
+                        const idx = Number(srOnlyMatch[1]) - 1;
+                        if (idx >= 0 && idx < roster70.length) {
+                            out.push({ isoDate: currentDate, toolCode: roster70[idx] });
+                        }
+                        return;
+                    }
+                    out.push({ isoDate: currentDate, toolCode: p.toUpperCase() });
+                });
+                return;
+            }
+        }
+
+        const standaloneDate = parseDateTokenToIso(line, activeYear, activeMonthIdx);
+        if (standaloneDate) {
+            currentDate = standaloneDate;
+            return;
+        }
+
+        if (currentDate) {
+            line.split(/[,;|]+/).forEach((part) => {
+                const p = part.trim().toUpperCase();
+                if (p) out.push({ isoDate: currentDate, toolCode: p });
+            });
+        }
+    });
+
+    return out;
+}
+
+function ensureToolInRoster(toolCode) {
+    const upper = String(toolCode || "").trim().toUpperCase();
+    if (!upper) return;
+    if (roster70.includes(upper)) return;
+    const placeholderIdx = roster70.findIndex((c) => /^TOOL-\d{3}$/.test(c));
+    if (placeholderIdx !== -1) {
+        roster70[placeholderIdx] = upper;
+    }
+}
+
+function applyAssignmentsToMatrix(assignments, clearOldP) {
+    if (!Array.isArray(assignments) || !assignments.length) return 0;
+
+    if (clearOldP) {
+        Object.keys(matrixState).forEach((k) => {
+            if (matrixState[k]) {
+                matrixState[k].p = false;
+                if (!matrixState[k].p && !matrixState[k].a && !matrixState[k].beforePhoto && !matrixState[k].afterPhoto && !matrixState[k].remark) {
+                    delete matrixState[k];
+                }
+            }
+        });
+    }
+
+    let appliedCount = 0;
+    let firstIso = "";
+
+    assignments.forEach(({ isoDate, toolCode }) => {
+        if (!isoDate || !toolCode) return;
+        if (!firstIso) firstIso = isoDate;
+        ensureToolInRoster(toolCode);
+
+        const key = `${toolCode}__${isoDate}`;
+        const existing = matrixState[key] || {
+            p: false,
+            a: false,
+            beforePhoto: "",
+            afterPhoto: "",
+            remark: ""
+        };
+        existing.p = true;
+        matrixState[key] = existing;
+        appliedCount += 1;
+    });
+
+    if (firstIso) {
+        const [yStr, mStr] = firstIso.split("-");
+        const y = Number(yStr);
+        const mIdx = Number(mStr) - 1;
+        if (y && mIdx >= 0 && mIdx <= 11) {
+            activeYear = y;
+            activeMonthIdx = mIdx;
+            const mp = document.getElementById("month-picker");
+            if (mp) mp.value = `${yStr}-${mStr}`;
+        }
+    }
+
+    saveRoster(roster70);
+    syncBackupAndMirror(matrixState);
+    updateHeaderTitle();
+    renderDateColumns();
+    renderExcelGrid();
+    bindSignOff();
+    return appliedCount;
+}
+
+async function runPlanPhotoOcr(file) {
+    const statusEl = document.getElementById("scan-status-text");
+    const previewImg = document.getElementById("scan-plan-preview");
+    const emptyBox = document.getElementById("scan-plan-empty");
+    const outTa = document.getElementById("scan-arranged-textarea");
+    const countBadge = document.getElementById("scan-detected-count");
+
+    const dataUrl = await compressImageToDataUrl(file, 1400, 0.85);
+    if (previewImg && emptyBox) {
+        previewImg.src = dataUrl;
+        previewImg.classList.remove("hidden");
+        emptyBox.classList.add("hidden");
+    }
+
+    if (!window.Tesseract) {
+        if (statusEl) statusEl.textContent = "OCR library unavailable — paste/edit text manually.";
+        return;
+    }
+
+    if (statusEl) statusEl.textContent = "Scanning plan photo with OCR...";
+    showToast("Scanning manual plan photo...");
+
+    try {
+        const result = await window.Tesseract.recognize(dataUrl, "eng");
+        const rawText = result?.data?.text || "";
+        const arranged = arrangeOcrTextToDateAndSr(rawText);
+
+        if (outTa) {
+            outTa.value = arranged.arrangedText || rawText.trim();
+        }
+        if (countBadge) {
+            countBadge.textContent = `${arranged.assignments.length} items detected`;
+        }
+        if (statusEl) {
+            statusEl.textContent = "Scan complete. Review/fix if needed and click 'Fix & Apply to PM Plan'.";
+        }
+        showToast("Scan complete!");
+    } catch {
+        if (statusEl) statusEl.textContent = "Could not read photo clearly — edit text manually.";
+        showToast("OCR scan failed");
+    }
+}
+
 function updateHeaderTitle() {
     const titleEl = document.getElementById("sheet-main-title");
     if (titleEl) {
@@ -367,7 +657,6 @@ function renderExcelGrid() {
             const key = `${code}__${iso}`;
             const item = matrixState[key] || {};
 
-            // 1. [P] Grid Cell
             const hasP = Boolean(item.p);
             pCells.push(`
                 <td class="p-0 text-center ${hasP ? "bg-amber-400/20 text-amber-300 font-bold" : "bg-[#11151d] text-stone-600 hover:bg-stone-800/80"}">
@@ -382,7 +671,6 @@ function renderExcelGrid() {
                 </td>
             `);
 
-            // 2. [A] Grid Cell
             const hasA = Boolean(item.a);
             aCells.push(`
                 <td class="p-0 text-center ${hasA ? "bg-emerald-500/20 text-emerald-300 font-bold" : "bg-[#11151d] text-stone-600 hover:bg-stone-800/80"}">
@@ -397,7 +685,6 @@ function renderExcelGrid() {
                 </td>
             `);
 
-            // 3. [PIC] Grid Cell
             const picCount = (item.beforePhoto ? 1 : 0) + (item.afterPhoto ? 1 : 0);
             const picCls =
                 picCount === 2
@@ -420,7 +707,6 @@ function renderExcelGrid() {
             `);
         }
 
-        // Row 1: [P]
         htmlRows.push(`
             <tr>
                 <td rowspan="3" class="sticky left-0 z-10 bg-[#11151d] py-1 px-2 text-center text-stone-300 font-bold align-middle">
@@ -458,7 +744,6 @@ function renderExcelGrid() {
             </tr>
         `);
 
-        // Row 2: [A]
         htmlRows.push(`
             <tr>
                 <td class="sticky left-[433px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-emerald-300">
@@ -468,7 +753,6 @@ function renderExcelGrid() {
             </tr>
         `);
 
-        // Row 3: [PIC]
         htmlRows.push(`
             <tr class="border-b-2 border-stone-600">
                 <td class="sticky left-[433px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-sky-300">
@@ -754,7 +1038,6 @@ async function exportPmSheetToExcelWithPics() {
     const totalDays = getDaysInMonth(activeYear, activeMonthIdx);
     const rows = getFilteredRosterRows();
 
-    // Sheet 1: PM Matrix (exact P, A, PIC grid + clickable link to photos)
     const sheet = workbook.addWorksheet("PM Plan Matrix");
     const totalCols = 4 + totalDays;
 
@@ -790,7 +1073,6 @@ async function exportPmSheetToExcelWithPics() {
         sheet.getColumn(c).width = 9;
     }
 
-    // Sheet 2: Before & After PM Photos
     const picSheet = workbook.addWorksheet("PM Photos");
     picSheet.columns = [
         { header: "Sr. No", key: "sr", width: 10 },
@@ -812,9 +1094,8 @@ async function exportPmSheetToExcelWithPics() {
 
     const targetRowByKey = new Map();
     let picRowCursor = 2;
-
-    // First collect all photo records so we know their exact row on "PM Photos" sheet
     const photoEntriesToEmbed = [];
+
     rows.forEach(({ srNo, code, exchange }) => {
         for (let d = 1; d <= totalDays; d++) {
             const iso = makeIsoDate(activeYear, activeMonthIdx, d);
@@ -940,7 +1221,6 @@ async function exportPmSheetToExcelWithPics() {
     signRow.getCell(3).value = `Approved By : ${appBy}`;
     signRow.font = { name: "Calibri", size: 10, bold: true };
 
-    // Populate "PM Photos" sheet with embedded Before/After images
     photoEntriesToEmbed.forEach((entry, idx) => {
         const excelRowNumber = 2 + idx;
         const row = picSheet.getRow(excelRowNumber);
@@ -1027,6 +1307,68 @@ function initFrontPageGrid() {
     renderDateColumns();
     renderExcelGrid();
     bindSignOff();
+
+    document.getElementById("toggle-scan-plan-btn")?.addEventListener("click", () => {
+        document.getElementById("scan-plan-panel")?.classList.toggle("hidden");
+    });
+
+    document.getElementById("scan-plan-file-input")?.addEventListener("change", async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        await runPlanPhotoOcr(file);
+    });
+
+    document.getElementById("reparse-scan-text-btn")?.addEventListener("click", () => {
+        const ta = document.getElementById("scan-arranged-textarea");
+        const countBadge = document.getElementById("scan-detected-count");
+        if (!ta) return;
+        const arranged = arrangeOcrTextToDateAndSr(ta.value);
+        if (arranged.arrangedText) {
+            ta.value = arranged.arrangedText;
+        }
+        if (countBadge) {
+            countBadge.textContent = `${arranged.assignments.length} items detected`;
+        }
+        showToast("Text arranged date & Sr/Tool wise");
+    });
+
+    document.getElementById("apply-scanned-plan-btn")?.addEventListener("click", () => {
+        const ta = document.getElementById("scan-arranged-textarea");
+        const clearOldP = Boolean(document.getElementById("scan-replace-existing-p")?.checked);
+        const assignments = parseArrangedOrBulkAssignments(ta?.value || "");
+        if (!assignments.length) {
+            showToast("No valid date & tool/Sr entries found");
+            return;
+        }
+        const count = applyAssignmentsToMatrix(assignments, clearOldP);
+        showToast(`Fixed & applied ${count} [P] entries to PM Plan`);
+    });
+
+    document.getElementById("toggle-bulk-plan-btn")?.addEventListener("click", () => {
+        document.getElementById("bulk-plan-panel")?.classList.toggle("hidden");
+    });
+
+    document.getElementById("sample-bulk-plan-btn")?.addEventListener("click", () => {
+        const ta = document.getElementById("bulk-plan-textarea");
+        if (!ta) return;
+        ta.value = [
+            "2/Nov: 145W410441-00202, 145W410461-00201, 145W410441-00207",
+            "3/Nov: 521140-007 OLD, 521185-003, 525024-001",
+            "4/Nov: 531686-004, 531686-005, 531856-002"
+        ].join("\n");
+    });
+
+    document.getElementById("apply-bulk-plan-btn")?.addEventListener("click", () => {
+        const raw = document.getElementById("bulk-plan-textarea")?.value || "";
+        const clearOldP = Boolean(document.getElementById("bulk-replace-existing-p")?.checked);
+        const assignments = parseArrangedOrBulkAssignments(raw);
+        if (!assignments.length) {
+            showToast("No valid date + mould lines found");
+            return;
+        }
+        const count = applyAssignmentsToMatrix(assignments, clearOldP);
+        showToast(`Applied ${count} date-wise [P] entries`);
+    });
 
     document.getElementById("export-excel-btn")?.addEventListener("click", exportPmSheetToExcelWithPics);
 
@@ -1118,7 +1460,6 @@ function initFrontPageGrid() {
         showToast(`Saved ${toolVal} on ${dateVal}`);
     });
 
-    // Photo modal listeners
     document.getElementById("modal-before-file")?.addEventListener("change", async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;

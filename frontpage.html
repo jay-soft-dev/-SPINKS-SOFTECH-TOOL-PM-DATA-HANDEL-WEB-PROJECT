@@ -21,6 +21,7 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="frontpage.css" />
     <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body class="bg-[#0b0d11] text-stone-100 min-h-screen antialiased">
     <!-- Top Bar -->
@@ -74,6 +75,20 @@
                     Clear Date
                 </button>
                 <button
+                    id="toggle-scan-plan-btn"
+                    type="button"
+                    class="px-3 py-1.5 rounded-lg bg-violet-400 hover:bg-violet-300 text-stone-950 font-bold"
+                >
+                    Auto Scan Plan Pic
+                </button>
+                <button
+                    id="toggle-bulk-plan-btn"
+                    type="button"
+                    class="px-3 py-1.5 rounded-lg bg-sky-400 hover:bg-sky-300 text-stone-950 font-bold"
+                >
+                    Bulk Text Plan
+                </button>
+                <button
                     id="export-excel-btn"
                     type="button"
                     class="px-3 py-1.5 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-stone-950 font-bold"
@@ -92,6 +107,112 @@
     </header>
 
     <main class="max-w-[1720px] mx-auto px-4 py-4 space-y-4">
+        <!-- Auto OCR Scanner for Manual PM Plan Photo -->
+        <section id="scan-plan-panel" class="hidden rounded-2xl bg-[#11151d] border border-violet-400/50 p-4 space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h2 class="text-xs sm:text-sm font-mono font-bold uppercase text-violet-300">
+                        Manual PM Plan Auto Scanner (Photo → Date &amp; Sr/Tool → Matrix)
+                    </h2>
+                    <p class="text-[11px] font-mono text-stone-400">
+                        Upload or capture manual plan photo — OCR reads text, arranges date &amp; Sr/Tool, and lets you fix &amp; apply to grid.
+                    </p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="cursor-pointer px-3 py-1.5 rounded-lg bg-violet-400 hover:bg-violet-300 text-stone-950 font-mono text-xs font-bold">
+                        <span>Select / Capture Plan Pic</span>
+                        <input id="scan-plan-file-input" type="file" accept="image/*" capture="environment" class="hidden" />
+                    </label>
+                    <label class="flex items-center gap-1.5 text-xs font-mono text-stone-300 cursor-pointer">
+                        <input id="scan-replace-existing-p" type="checkbox" class="rounded accent-violet-400" />
+                        <span>Clear old [P]</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                <div class="rounded-xl bg-[#0b0d11] border border-stone-800 p-2.5 flex flex-col justify-between space-y-2">
+                    <span class="text-[11px] font-mono text-stone-400">Uploaded Plan Preview:</span>
+                    <img id="scan-plan-preview" alt="Manual Plan Preview" class="hidden max-h-48 w-full object-contain rounded-lg border border-stone-700" />
+                    <div id="scan-plan-empty" class="h-40 rounded-lg border border-dashed border-stone-700 flex items-center justify-center text-xs font-mono text-stone-500">
+                        No plan image selected
+                    </div>
+                    <p id="scan-status-text" class="text-[11px] font-mono text-violet-300">Ready to scan</p>
+                </div>
+
+                <div class="lg:col-span-2 rounded-xl bg-[#0b0d11] border border-stone-800 p-2.5 space-y-2">
+                    <div class="flex items-center justify-between text-[11px] font-mono">
+                        <span class="text-amber-300 font-bold">Arranged Date &amp; Sr/Tool Text (Editable before Apply):</span>
+                        <span id="scan-detected-count" class="text-emerald-300">0 items detected</span>
+                    </div>
+                    <textarea
+                        id="scan-arranged-textarea"
+                        rows="7"
+                        placeholder="Scanned date & Sr/Tool lines will appear here like:&#10;2/Nov: Sr 1 (145W410441-00202), Sr 2 (145W410461-00201), Sr 3 (145W410441-00207)"
+                        class="w-full bg-[#11151d] border border-stone-700 rounded-lg p-2.5 text-xs font-mono text-stone-100 focus:border-violet-400 focus:outline-none"
+                    ></textarea>
+                    <div class="flex items-center justify-end gap-2 font-mono text-xs">
+                        <button
+                            id="reparse-scan-text-btn"
+                            type="button"
+                            class="px-3 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-600 text-stone-200"
+                        >
+                            Re-Arrange Text
+                        </button>
+                        <button
+                            id="apply-scanned-plan-btn"
+                            type="button"
+                            class="px-4 py-1.5 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-stone-950 font-bold"
+                        >
+                            Fix &amp; Apply to PM Plan
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Bulk Date-Wise Text Plan Setter -->
+        <section id="bulk-plan-panel" class="hidden rounded-2xl bg-[#11151d] border border-sky-400/50 p-4 space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h2 class="text-xs sm:text-sm font-mono font-bold uppercase text-sky-300">
+                        Quick Date-Wise PM Plan (Text Paste)
+                    </h2>
+                    <p class="text-[11px] font-mono text-stone-400">
+                        Format: <span class="text-amber-200">2/Nov: 145W410441-00202, 145W410461-00201, 145W410441-00207</span> (or date line followed by mould numbers)
+                    </p>
+                </div>
+                <label class="flex items-center gap-2 text-xs font-mono text-stone-300 cursor-pointer">
+                    <input id="bulk-replace-existing-p" type="checkbox" class="rounded accent-amber-400" />
+                    <span>Clear old [P] marks first</span>
+                </label>
+            </div>
+
+            <textarea
+                id="bulk-plan-textarea"
+                rows="5"
+                placeholder="2/Nov: 145W410441-00202, 145W410461-00201, 145W410441-00207&#10;3/Nov: 521140-007 OLD, 521185-003, 525024-001"
+                class="w-full bg-[#0b0d11] border border-stone-700 rounded-xl p-3 text-xs font-mono text-stone-100 placeholder-stone-600 focus:border-sky-400 focus:outline-none"
+            ></textarea>
+
+            <div class="flex flex-wrap items-center justify-end gap-2 font-mono text-xs">
+                <button
+                    id="sample-bulk-plan-btn"
+                    type="button"
+                    class="px-3 py-2 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-600 text-stone-200"
+                >
+                    Fill Sample (3/Day)
+                </button>
+                <button
+                    id="apply-bulk-plan-btn"
+                    type="button"
+                    class="px-4 py-2 rounded-lg bg-sky-400 hover:bg-sky-300 text-stone-950 font-bold"
+                >
+                    Apply Plan to Sheet
+                </button>
+            </div>
+        </section>
+
         <!-- Add or Assign Tool into 70-Tool Sheet -->
         <section id="add-tool-panel" class="hidden rounded-2xl bg-[#11151d] border border-amber-400/40 p-4">
             <form id="add-tool-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
