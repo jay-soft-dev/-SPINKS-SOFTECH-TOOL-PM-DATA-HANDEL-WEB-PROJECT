@@ -19,13 +19,7 @@
         };
     </script>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <style>
-        .excel-grid,
-        .excel-grid th,
-        .excel-grid td {
-            border: 1px solid #3f4654;
-        }
-    </style>
+    <link rel="stylesheet" href="frontpage.css" />
 </head>
 <body class="bg-[#0b0d11] text-stone-100 min-h-screen antialiased">
     <!-- Top Bar -->
@@ -63,6 +57,21 @@
                     placeholder="Search Tool No / Sr..."
                     class="bg-[#181d28] border border-stone-700 rounded-lg px-2.5 py-1.5 text-white placeholder-stone-500"
                 />
+                <input
+                    id="date-search-input"
+                    type="date"
+                    title="Search to Date"
+                    aria-label="Search to Date"
+                    class="bg-[#181d28] border border-stone-700 rounded-lg px-2.5 py-1.5 text-sky-300"
+                />
+                <button
+                    id="clear-date-search-btn"
+                    type="button"
+                    title="Clear Date Search"
+                    class="px-2 py-1.5 rounded-lg bg-[#181d28] hover:bg-stone-800 border border-stone-700 text-stone-300"
+                >
+                    Clear Date
+                </button>
                 <button
                     id="toggle-add-tool-btn"
                     type="button"
@@ -128,10 +137,10 @@
                             <th class="sticky left-12 z-30 bg-[#151a24] py-2.5 px-3 text-left min-w-[205px]">
                                 TOOL NUMBER
                             </th>
-                            <th class="sticky left-12 z-30 bg-[#151a24] py-2.5 px-3 text-left min-w-[205px]">
-                                TOOL EXCHANGE / REPAIR / REMARK
+                            <th class="sticky left-[253px] z-30 bg-[#151a24] py-2.5 px-3 text-left min-w-[180px] text-amber-200">
+                                TOOL EXCHANGE
                             </th>
-                            <th class="sticky left-[210px] z-30 bg-[#151a24] py-2.5 px-2 text-center w-16">
+                            <th class="sticky left-[433px] z-30 bg-[#151a24] py-2.5 px-2 text-center w-16">
                                 GRID
                             </th>
                             <th id="date-headers-slot" colspan="30" class="py-2 px-2 text-center text-amber-300 tracking-wider">
@@ -143,7 +152,10 @@
                             <th class="sticky left-12 z-30 bg-[#0d1017] px-3 py-1.5 text-left text-stone-400">
                                 Mould Code
                             </th>
-                            <th class="sticky left-[253px] z-30 bg-[#0d1017] px-2 py-1.5 text-center text-stone-400">
+                            <th class="sticky left-[253px] z-30 bg-[#0d1017] px-3 py-1.5 text-left text-stone-400">
+                                Tool Exchange
+                            </th>
+                            <th class="sticky left-[433px] z-30 bg-[#0d1017] px-2 py-1.5 text-center text-stone-400">
                                 Type
                             </th>
                         </tr>
@@ -270,6 +282,7 @@
 
     <div id="toast" class="fixed bottom-5 right-5 z-50 translate-y-20 opacity-0 pointer-events-none transition-all duration-300 rounded-xl bg-stone-900 border border-amber-400/50 px-4 py-2.5 text-xs font-mono text-amber-200"></div>
 
+    <script src="pm-pic-backup.js"></script>
     <script src="frontpage.js"></script>
 </body>
 </html>

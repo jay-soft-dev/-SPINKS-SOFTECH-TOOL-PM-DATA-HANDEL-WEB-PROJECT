@@ -9,6 +9,7 @@ const MONTHS_SHORT = [
 
 const TOTAL_PM_TOOLS = 70;
 const ROSTER_STORAGE_KEY = "ToolSyncPM_70_Roster_v2";
+const EXCHANGE_STORAGE_KEY = "ToolSyncPM_70_ToolExchange_v1";
 const MATRIX_STATE_KEY = "ToolSyncPM_Matrix_3Grid_v1";
 const PHOTO_BACKUP_KEY = "ToolSyncPM_PhotoBackup_v1";
 const SHARED_TOOLS_MIRROR_KEY = "ToolSyncPM_Tools_v1";
@@ -97,6 +98,25 @@ function loadRoster() {
 function saveRoster(roster) {
     try {
         localStorage.setItem(ROSTER_STORAGE_KEY, JSON.stringify(roster.slice(0, TOTAL_PM_TOOLS)));
+    } catch {
+        // Ignore storage errors
+    }
+}
+
+function loadExchangeMap() {
+    try {
+        const raw = localStorage.getItem(EXCHANGE_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function saveExchangeMap(mapObj) {
+    try {
+        localStorage.setItem(EXCHANGE_STORAGE_KEY, JSON.stringify(mapObj));
     } catch {
         // Ignore storage errors
     }
@@ -226,6 +246,7 @@ function compressImageToDataUrl(file, maxWidth = 900, quality = 0.72) {
 let activeYear = 2026;
 let activeMonthIdx = 10; // November
 let roster70 = loadRoster();
+let exchangeMap = loadExchangeMap();
 let matrixState = loadMatrixState();
 
 // Modal state
@@ -267,7 +288,10 @@ function renderDateColumns() {
         <th class="sticky left-12 z-30 bg-[#0d1017] px-3 py-1.5 text-left text-stone-400">
             Mould Code
         </th>
-        <th class="sticky left-[253px] z-30 bg-[#0d1017] px-2 py-1.5 text-center text-stone-400">
+        <th class="sticky left-[253px] z-30 bg-[#0d1017] px-3 py-1.5 text-left text-stone-400">
+            Tool Exchange
+        </th>
+        <th class="sticky left-[433px] z-30 bg-[#0d1017] px-2 py-1.5 text-center text-stone-400">
             Type
         </th>
     `;
@@ -284,13 +308,32 @@ function renderDateColumns() {
     headerRow.innerHTML = prefixCols + dateCols.join("");
 }
 
+function hasActivityOnDate(code, targetDate) {
+    if (!targetDate) return true;
+    const item = matrixState[`${code}__${targetDate}`];
+    if (!item) return false;
+    return Boolean(item.p || item.a || item.beforePhoto || item.afterPhoto || item.remark);
+}
+
 function getFilteredRosterRows() {
     const q = (document.getElementById("tool-search-input")?.value || "").trim().toLowerCase();
-    const rows = roster70.map((code, i) => ({ srNo: i + 1, code }));
-    if (!q) return rows;
-    return rows.filter(
-        (r) => String(r.srNo) === q || r.code.toLowerCase().includes(q)
-    );
+    const targetDate = (document.getElementById("date-search-input")?.value || "").trim();
+
+    const rows = roster70.map((code, i) => ({
+        srNo: i + 1,
+        code,
+        exchange: exchangeMap[String(i + 1)] || ""
+    }));
+
+    return rows.filter((r) => {
+        const matchesQuery =
+            !q ||
+            String(r.srNo) === q ||
+            r.code.toLowerCase().includes(q) ||
+            r.exchange.toLowerCase().includes(q);
+        const matchesDate = hasActivityOnDate(r.code, targetDate);
+        return matchesQuery && matchesDate;
+    });
 }
 
 function renderExcelGrid() {
@@ -303,7 +346,7 @@ function renderExcelGrid() {
     if (!rows.length) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="${totalDays + 3}" class="py-6 text-center text-stone-400">
+                <td colspan="${totalDays + 4}" class="py-6 text-center text-stone-400">
                     No matching tool numbers found.
                 </td>
             </tr>
@@ -313,7 +356,7 @@ function renderExcelGrid() {
 
     const htmlRows = [];
 
-    rows.forEach(({ srNo, code }) => {
+    rows.forEach(({ srNo, code, exchange }) => {
         const pCells = [];
         const aCells = [];
         const picCells = [];
@@ -392,7 +435,22 @@ function renderExcelGrid() {
                         ${escapeAttr(code)}
                     </button>
                 </td>
-                <td class="sticky left-[253px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-amber-300">
+                <td rowspan="3" class="sticky left-[253px] z-10 bg-[#11151d] py-1 px-2.5 text-left align-middle max-w-[180px]">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-[11px] truncate ${exchange ? "text-amber-200 font-semibold" : "text-stone-500"}" title="${escapeAttr(exchange)}">
+                            ${exchange ? escapeAttr(exchange) : "—"}
+                        </span>
+                        <button
+                            type="button"
+                            onclick="editToolExchange(${srNo - 1})"
+                            class="shrink-0 px-1.5 py-0.5 rounded bg-stone-800 hover:bg-amber-400/20 border border-stone-600 hover:border-amber-400/60 text-[10px] text-amber-300 font-bold"
+                            title="Edit Tool Exchange for Sr #${srNo}"
+                        >
+                            Edit
+                        </button>
+                    </div>
+                </td>
+                <td class="sticky left-[433px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-amber-300">
                     P
                 </td>
                 ${pCells.join("")}
@@ -402,7 +460,7 @@ function renderExcelGrid() {
         // Row 2: [A]
         htmlRows.push(`
             <tr>
-                <td class="sticky left-[253px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-emerald-300">
+                <td class="sticky left-[433px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-emerald-300">
                     A
                 </td>
                 ${aCells.join("")}
@@ -412,7 +470,7 @@ function renderExcelGrid() {
         // Row 3: [PIC]
         htmlRows.push(`
             <tr class="border-b-2 border-stone-600">
-                <td class="sticky left-[253px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-sky-300">
+                <td class="sticky left-[433px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-sky-300">
                     PIC
                 </td>
                 ${picCells.join("")}
@@ -422,6 +480,28 @@ function renderExcelGrid() {
 
     tbody.innerHTML = htmlRows.join("");
 }
+
+window.editToolExchange = function (index) {
+    if (index < 0 || index >= roster70.length) return;
+    const srKey = String(index + 1);
+    const current = exchangeMap[srKey] || "";
+    const entered = window.prompt(
+        `Enter Tool Exchange for Sr. No ${index + 1} (${roster70[index]}):`,
+        current
+    );
+    if (entered === null) return;
+
+    const clean = entered.trim();
+    if (clean) {
+        exchangeMap[srKey] = clean;
+    } else {
+        delete exchangeMap[srKey];
+    }
+
+    saveExchangeMap(exchangeMap);
+    renderExcelGrid();
+    showToast(`Tool Exchange updated for Sr #${index + 1}`);
+};
 
 window.toggleFlagCell = function (toolCode, isoDate, field) {
     const key = `${toolCode}__${isoDate}`;
@@ -464,6 +544,14 @@ window.editRosterTool = function (index) {
             const val = matrixState[k];
             delete matrixState[k];
             matrixState[`${clean}__${datePart}`] = val;
+            if (typeof window.syncToolBeforeAfterPicBackup === "function" && val) {
+                window.syncToolBeforeAfterPicBackup({
+                    toolNo: clean,
+                    date: datePart,
+                    beforePic: val.beforePhoto || "",
+                    afterPic: val.afterPhoto || ""
+                });
+            }
         }
     });
 
@@ -608,6 +696,31 @@ function initFrontPageGrid() {
 
     document.getElementById("tool-search-input")?.addEventListener("input", renderExcelGrid);
 
+    document.getElementById("date-search-input")?.addEventListener("change", (e) => {
+        const val = e.target.value;
+        if (val && val.includes("-")) {
+            const [yStr, mStr] = val.split("-");
+            const y = Number(yStr);
+            const mIdx = Number(mStr) - 1;
+            if (y && mIdx >= 0 && mIdx <= 11 && (y !== activeYear || mIdx !== activeMonthIdx)) {
+                activeYear = y;
+                activeMonthIdx = mIdx;
+                const mp = document.getElementById("month-picker");
+                if (mp) mp.value = `${yStr}-${mStr}`;
+                updateHeaderTitle();
+                renderDateColumns();
+                bindSignOff();
+            }
+        }
+        renderExcelGrid();
+    });
+
+    document.getElementById("clear-date-search-btn")?.addEventListener("click", () => {
+        const dateInput = document.getElementById("date-search-input");
+        if (dateInput) dateInput.value = "";
+        renderExcelGrid();
+    });
+
     document.getElementById("toggle-add-tool-btn")?.addEventListener("click", () => {
         document.getElementById("add-tool-panel")?.classList.toggle("hidden");
     });
@@ -712,6 +825,15 @@ function initFrontPageGrid() {
             delete matrixState[key];
         } else {
             matrixState[key] = nextEntry;
+        }
+
+        if (typeof window.syncToolBeforeAfterPicBackup === "function") {
+            window.syncToolBeforeAfterPicBackup({
+                toolNo: activePicTool,
+                date: activePicDate,
+                beforePic: draftBeforeUrl,
+                afterPic: draftAfterUrl
+            });
         }
 
         syncBackupAndMirror(matrixState);
