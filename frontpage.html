@@ -20,6 +20,7 @@
     </script>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="frontpage.css" />
+    <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 </head>
 <body class="bg-[#0b0d11] text-stone-100 min-h-screen antialiased">
     <!-- Top Bar -->
@@ -71,6 +72,13 @@
                     class="px-2 py-1.5 rounded-lg bg-[#181d28] hover:bg-stone-800 border border-stone-700 text-stone-300"
                 >
                     Clear Date
+                </button>
+                <button
+                    id="export-excel-btn"
+                    type="button"
+                    class="px-3 py-1.5 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-stone-950 font-bold"
+                >
+                    Export Excel + Pics
                 </button>
                 <button
                     id="toggle-add-tool-btn"
@@ -127,7 +135,7 @@
 
         <!-- Excel-Style Row/Column Matrix Sheet with 3 Sub-Grids per Tool -->
         <section class="rounded-2xl bg-[#11151d] border-2 border-stone-600 overflow-hidden shadow-xl">
-            <div class="overflow-x-auto max-h-[72vh]">
+            <div class="pm-scroll-area overflow-x-auto max-h-[72vh]">
                 <table class="excel-grid w-full border-collapse text-xs font-mono">
                     <thead class="sticky top-0 z-20">
                         <tr class="bg-[#151a24] text-stone-100">

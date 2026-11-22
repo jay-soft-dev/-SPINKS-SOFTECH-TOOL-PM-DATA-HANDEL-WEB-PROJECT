@@ -12,6 +12,7 @@ const ROSTER_STORAGE_KEY = "ToolSyncPM_70_Roster_v2";
 const EXCHANGE_STORAGE_KEY = "ToolSyncPM_70_ToolExchange_v1";
 const MATRIX_STATE_KEY = "ToolSyncPM_Matrix_3Grid_v1";
 const PHOTO_BACKUP_KEY = "ToolSyncPM_PhotoBackup_v1";
+const ONLY_PIC_BACKUP_KEY = "ToolSyncPM_Only_Pic_Backup_v1";
 const SHARED_TOOLS_MIRROR_KEY = "ToolSyncPM_Tools_v1";
 
 const INITIAL_30_TOOLS = [
@@ -664,6 +665,351 @@ function bindSignOff() {
     if (appEl) appEl.oninput = saveSignOff;
 }
 
+function decodeDataUrlToUint8Array(dataUrl) {
+    if (!dataUrl || typeof dataUrl !== "string") return null;
+    const match = dataUrl.match(/^data:image\/([a-zA-Z0-9+.-]+);base64,(.+)$/);
+    if (!match) return null;
+
+    const rawType = match[1].toLowerCase();
+    const extension =
+        rawType === "jpg" || rawType === "jpeg"
+            ? "jpeg"
+            : rawType === "png"
+            ? "png"
+            : rawType === "gif"
+            ? "gif"
+            : "jpeg";
+
+    try {
+        const binaryStr = atob(match[2].replace(/\s+/g, ""));
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binaryStr.charCodeAt(i);
+        }
+        return { buffer: bytes, extension };
+    } catch {
+        return null;
+    }
+}
+
+function resolvePhotosForKey(toolCode, isoDate) {
+    const key = `${toolCode}__${isoDate}`;
+    const item = matrixState[key] || {};
+    let beforePhoto = item.beforePhoto || "";
+    let afterPhoto = item.afterPhoto || "";
+    let remark = item.remark || "";
+
+    const backupKeys = [PHOTO_BACKUP_KEY, ONLY_PIC_BACKUP_KEY];
+    for (const storageKey of backupKeys) {
+        if (beforePhoto && afterPhoto) break;
+        try {
+            const list = JSON.parse(localStorage.getItem(storageKey) || "[]");
+            if (!Array.isArray(list)) continue;
+            list.forEach((rec) => {
+                if (!rec) return;
+                const recTool = String(rec.toolCode || rec.toolNo || "").trim().toUpperCase();
+                const recDate = String(rec.date || "").trim();
+                const picSrc = rec.photo || rec.pic || "";
+                if (recTool !== toolCode || recDate !== isoDate || !picSrc) return;
+
+                const stage = String(rec.stage || "").trim().toUpperCase();
+                if (stage.includes("AFTER")) {
+                    if (!afterPhoto) afterPhoto = picSrc;
+                } else if (!beforePhoto) {
+                    beforePhoto = picSrc;
+                }
+                if (!remark && rec.remarks) remark = rec.remarks;
+            });
+        } catch {
+            // Ignore backup read errors
+        }
+    }
+
+    return { beforePhoto, afterPhoto, remark };
+}
+
+function applyThinBorder(cell, colorHex = "FF3F4654") {
+    cell.border = {
+        top: { style: "thin", color: { argb: colorHex } },
+        left: { style: "thin", color: { argb: colorHex } },
+        bottom: { style: "thin", color: { argb: colorHex } },
+        right: { style: "thin", color: { argb: colorHex } }
+    };
+}
+
+async function exportPmSheetToExcelWithPics() {
+    if (!window.ExcelJS) {
+        showToast("ExcelJS library failed to load");
+        return;
+    }
+
+    showToast("Generating Excel with PM photos...");
+
+    const workbook = new window.ExcelJS.Workbook();
+    workbook.creator = "ToolSync PM";
+    workbook.created = new Date();
+
+    const monthTag = `${activeYear}-${String(activeMonthIdx + 1).padStart(2, "0")}`;
+    const totalDays = getDaysInMonth(activeYear, activeMonthIdx);
+    const rows = getFilteredRosterRows();
+
+    // Sheet 1: PM Matrix (exact P, A, PIC grid + clickable link to photos)
+    const sheet = workbook.addWorksheet("PM Plan Matrix");
+    const totalCols = 4 + totalDays;
+
+    sheet.mergeCells(1, 1, 1, totalCols);
+    const titleCell = sheet.getCell(1, 1);
+    titleCell.value = `MOULD PREVENTIVE MAINTENANCE PLAN ${MONTHS_UPPER[activeMonthIdx]} - ${activeYear}`;
+    titleCell.font = { name: "Calibri", size: 13, bold: true, color: { argb: "FFFCD34D" } };
+    titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0D1017" } };
+    titleCell.alignment = { horizontal: "center", vertical: "middle" };
+    sheet.getRow(1).height = 26;
+
+    const headerRow = sheet.getRow(2);
+    headerRow.values = [
+        "Sr. No",
+        "TOOL NUMBER",
+        "TOOL EXCHANGE",
+        "GRID",
+        ...Array.from({ length: totalDays }, (_, idx) => `${idx + 1}/${MONTHS_SHORT[activeMonthIdx]}`)
+    ];
+    headerRow.height = 22;
+    headerRow.eachCell((cell) => {
+        cell.font = { name: "Calibri", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF151A24" } };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        applyThinBorder(cell);
+    });
+
+    sheet.getColumn(1).width = 8;
+    sheet.getColumn(2).width = 24;
+    sheet.getColumn(3).width = 24;
+    sheet.getColumn(4).width = 8;
+    for (let c = 5; c <= totalCols; c++) {
+        sheet.getColumn(c).width = 9;
+    }
+
+    // Sheet 2: Before & After PM Photos
+    const picSheet = workbook.addWorksheet("PM Photos");
+    picSheet.columns = [
+        { header: "Sr. No", key: "sr", width: 10 },
+        { header: "TOOL NUMBER", key: "tool", width: 25 },
+        { header: "DATE", key: "date", width: 15 },
+        { header: "BEFORE PM PHOTO", key: "before", width: 32 },
+        { header: "AFTER PM PHOTO", key: "after", width: 32 },
+        { header: "REMARK", key: "remark", width: 34 }
+    ];
+
+    const picHeader = picSheet.getRow(1);
+    picHeader.height = 24;
+    picHeader.eachCell((cell) => {
+        cell.font = { name: "Calibri", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF151A24" } };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        applyThinBorder(cell);
+    });
+
+    const targetRowByKey = new Map();
+    let picRowCursor = 2;
+
+    // First collect all photo records so we know their exact row on "PM Photos" sheet
+    const photoEntriesToEmbed = [];
+    rows.forEach(({ srNo, code, exchange }) => {
+        for (let d = 1; d <= totalDays; d++) {
+            const iso = makeIsoDate(activeYear, activeMonthIdx, d);
+            const resolvedPics = resolvePhotosForKey(code, iso);
+            if (resolvedPics.beforePhoto || resolvedPics.afterPhoto || resolvedPics.remark) {
+                const entryKey = `${code}__${iso}`;
+                targetRowByKey.set(entryKey, `B${picRowCursor}`);
+                photoEntriesToEmbed.push({
+                    srNo,
+                    code,
+                    exchange: exchange || "—",
+                    date: iso,
+                    beforePhoto: resolvedPics.beforePhoto,
+                    afterPhoto: resolvedPics.afterPhoto,
+                    remark: resolvedPics.remark
+                });
+                picRowCursor += 1;
+            }
+        }
+    });
+
+    let currentRowNum = 3;
+
+    rows.forEach(({ srNo, code, exchange }) => {
+        const pRowNum = currentRowNum;
+        const aRowNum = currentRowNum + 1;
+        const picRowNum = currentRowNum + 2;
+
+        sheet.mergeCells(pRowNum, 1, picRowNum, 1);
+        sheet.mergeCells(pRowNum, 2, picRowNum, 2);
+        sheet.mergeCells(pRowNum, 3, picRowNum, 3);
+
+        const srCell = sheet.getCell(pRowNum, 1);
+        srCell.value = srNo;
+        srCell.alignment = { horizontal: "center", vertical: "middle" };
+        srCell.font = { name: "Calibri", size: 10, bold: true };
+
+        const codeCell = sheet.getCell(pRowNum, 2);
+        codeCell.value = code;
+        codeCell.alignment = { horizontal: "left", vertical: "middle" };
+        codeCell.font = { name: "Calibri", size: 10, bold: true };
+
+        const exCell = sheet.getCell(pRowNum, 3);
+        exCell.value = exchange || "—";
+        exCell.alignment = { horizontal: "left", vertical: "middle" };
+        exCell.font = { name: "Calibri", size: 10 };
+
+        const pLabel = sheet.getCell(pRowNum, 4);
+        pLabel.value = "P";
+        pLabel.alignment = { horizontal: "center", vertical: "middle" };
+        pLabel.font = { name: "Calibri", size: 10, bold: true, color: { argb: "FFD97706" } };
+
+        const aLabel = sheet.getCell(aRowNum, 4);
+        aLabel.value = "A";
+        aLabel.alignment = { horizontal: "center", vertical: "middle" };
+        aLabel.font = { name: "Calibri", size: 10, bold: true, color: { argb: "FF059669" } };
+
+        const picLabel = sheet.getCell(picRowNum, 4);
+        picLabel.value = "PIC";
+        picLabel.alignment = { horizontal: "center", vertical: "middle" };
+        picLabel.font = { name: "Calibri", size: 10, bold: true, color: { argb: "FF0284C7" } };
+
+        for (let d = 1; d <= totalDays; d++) {
+            const iso = makeIsoDate(activeYear, activeMonthIdx, d);
+            const item = matrixState[`${code}__${iso}`] || {};
+            const resolvedPics = resolvePhotosForKey(code, iso);
+            const colIdx = 4 + d;
+
+            const pCell = sheet.getCell(pRowNum, colIdx);
+            pCell.value = item.p ? "P" : "";
+            pCell.alignment = { horizontal: "center", vertical: "middle" };
+            if (item.p) {
+                pCell.font = { name: "Calibri", size: 10, bold: true, color: { argb: "FF92400E" } };
+                pCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF3C7" } };
+            }
+
+            const aCell = sheet.getCell(aRowNum, colIdx);
+            aCell.value = item.a ? "A" : "";
+            aCell.alignment = { horizontal: "center", vertical: "middle" };
+            if (item.a) {
+                aCell.font = { name: "Calibri", size: 10, bold: true, color: { argb: "FF065F46" } };
+                aCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD1FAE5" } };
+            }
+
+            const picCount = (resolvedPics.beforePhoto ? 1 : 0) + (resolvedPics.afterPhoto ? 1 : 0);
+            const picCell = sheet.getCell(picRowNum, colIdx);
+            picCell.alignment = { horizontal: "center", vertical: "middle" };
+
+            if (picCount > 0) {
+                const targetCellRef = targetRowByKey.get(`${code}__${iso}`) || "A2";
+                picCell.value = {
+                    text: `PIC(${picCount})`,
+                    hyperlink: `#'PM Photos'!${targetCellRef}`,
+                    tooltip: `Click to view Before/After PM Photos for ${code} (${iso})`
+                };
+                picCell.font = {
+                    name: "Calibri",
+                    size: 9,
+                    bold: true,
+                    underline: true,
+                    color: { argb: "FF075985" }
+                };
+                picCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE0F2FE" } };
+            } else {
+                picCell.value = "";
+            }
+        }
+
+        [pRowNum, aRowNum, picRowNum].forEach((rNum) => {
+            sheet.getRow(rNum).height = 19;
+            for (let c = 1; c <= totalCols; c++) {
+                applyThinBorder(sheet.getCell(rNum, c));
+            }
+        });
+
+        currentRowNum += 3;
+    });
+
+    const prepBy = document.getElementById("prepared-by-input")?.value.trim() || "";
+    const appBy = document.getElementById("approved-by-input")?.value.trim() || "";
+    const signRow = sheet.getRow(currentRowNum + 1);
+    signRow.getCell(2).value = `Prepared By : ${prepBy}`;
+    signRow.getCell(3).value = `Approved By : ${appBy}`;
+    signRow.font = { name: "Calibri", size: 10, bold: true };
+
+    // Populate "PM Photos" sheet with embedded Before/After images
+    photoEntriesToEmbed.forEach((entry, idx) => {
+        const excelRowNumber = 2 + idx;
+        const row = picSheet.getRow(excelRowNumber);
+        row.height = 120;
+        row.getCell(1).value = entry.srNo;
+        row.getCell(2).value = entry.code;
+        row.getCell(3).value = entry.date;
+        row.getCell(6).value = entry.remark;
+
+        for (let c = 1; c <= 6; c++) {
+            const cell = row.getCell(c);
+            cell.alignment = {
+                horizontal: c === 2 || c === 6 ? "left" : "center",
+                vertical: "middle",
+                wrapText: true
+            };
+            cell.font = { name: "Calibri", size: 10 };
+            applyThinBorder(cell);
+        }
+
+        const zeroBasedRow = excelRowNumber - 1;
+
+        const decodedBefore = decodeDataUrlToUint8Array(entry.beforePhoto);
+        if (decodedBefore) {
+            const beforeImgId = workbook.addImage({
+                buffer: decodedBefore.buffer,
+                extension: decodedBefore.extension
+            });
+            picSheet.addImage(beforeImgId, {
+                tl: { col: 3.15, row: zeroBasedRow + 0.08 },
+                ext: { width: 165, height: 135 },
+                editAs: "oneCell"
+            });
+        } else {
+            row.getCell(4).value = "No Before Photo";
+        }
+
+        const decodedAfter = decodeDataUrlToUint8Array(entry.afterPhoto);
+        if (decodedAfter) {
+            const afterImgId = workbook.addImage({
+                buffer: decodedAfter.buffer,
+                extension: decodedAfter.extension
+            });
+            picSheet.addImage(afterImgId, {
+                tl: { col: 4.15, row: zeroBasedRow + 0.08 },
+                ext: { width: 165, height: 135 },
+                editAs: "oneCell"
+            });
+        } else {
+            row.getCell(5).value = "No After Photo";
+        }
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `Mould_PM_Plan_${monthTag}_With_Pics.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    showToast("Excel downloaded with clickable PIC links & photos!");
+}
+
 function initFrontPageGrid() {
     Object.keys(matrixState).forEach((k) => {
         const code = (k.split("__")[0] || "").trim().toUpperCase();
@@ -681,6 +1027,8 @@ function initFrontPageGrid() {
     renderDateColumns();
     renderExcelGrid();
     bindSignOff();
+
+    document.getElementById("export-excel-btn")?.addEventListener("click", exportPmSheetToExcelWithPics);
 
     document.getElementById("month-picker")?.addEventListener("change", (e) => {
         const val = e.target.value;
