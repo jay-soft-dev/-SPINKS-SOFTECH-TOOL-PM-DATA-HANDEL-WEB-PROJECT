@@ -8,8 +8,10 @@ const MONTHS_SHORT = [
 ];
 
 const TOTAL_PM_TOOLS = 70;
-const ROSTER_STORAGE_KEY = "ToolSyncPM_70_Roster_v2";
-const EXCHANGE_STORAGE_KEY = "ToolSyncPM_70_ToolExchange_v1";
+const MONTH_ROSTER_STORAGE_KEY = "ToolSyncPM_MonthRoster_v1";
+const MONTH_EXCHANGE_STORAGE_KEY = "ToolSyncPM_MonthExchange_v1";
+const LEGACY_ROSTER_KEY = "ToolSyncPM_70_Roster_v2";
+const LEGACY_EXCHANGE_KEY = "ToolSyncPM_70_ToolExchange_v1";
 const MATRIX_STATE_KEY = "ToolSyncPM_Matrix_3Grid_v1";
 const PHOTO_BACKUP_KEY = "ToolSyncPM_PhotoBackup_v1";
 const ONLY_PIC_BACKUP_KEY = "ToolSyncPM_Only_Pic_Backup_v1";
@@ -37,57 +39,125 @@ function showToast(msg) {
     }, 2200);
 }
 
-function createDefault70Roster() {
+function createPlaceholderToolCode(indexZeroBased) {
+    return `TOOL-${String(indexZeroBased + 1).padStart(3, "0")}`;
+}
+
+function createEmpty70Roster() {
     const list = [];
-    for (let i = 1; i <= TOTAL_PM_TOOLS; i++) {
-        list.push(`TOOL-${String(i).padStart(3, "0")}`);
+    for (let i = 0; i < TOTAL_PM_TOOLS; i++) {
+        list.push(createPlaceholderToolCode(i));
     }
     return list;
 }
 
-function loadRoster() {
-    const defaults = createDefault70Roster();
+function normalize70List(arr) {
+    const defaults = createEmpty70Roster();
+    const out = [];
+    for (let i = 0; i < TOTAL_PM_TOOLS; i++) {
+        const val = Array.isArray(arr) ? String(arr[i] ?? defaults[i]).trim().toUpperCase() : defaults[i];
+        out.push(val || defaults[i]);
+    }
+    return out;
+}
+
+function getMonthKey(year, monthIdx) {
+    return `${year}-${String(monthIdx + 1).padStart(2, "0")}`;
+}
+
+function loadMonthRosterMap() {
     try {
-        const raw = localStorage.getItem(ROSTER_STORAGE_KEY);
-        if (!raw) return defaults;
-        const arr = JSON.parse(raw);
-        if (!Array.isArray(arr) || !arr.length) return defaults;
-        const out = [];
-        for (let i = 0; i < TOTAL_PM_TOOLS; i++) {
-            const val = String(arr[i] ?? defaults[i]).trim().toUpperCase();
-            out.push(val || defaults[i]);
+        const raw = localStorage.getItem(MONTH_ROSTER_STORAGE_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object") {
+                const cleaned = {};
+                Object.entries(parsed).forEach(([mKey, list]) => {
+                    cleaned[mKey] = normalize70List(list);
+                });
+                return cleaned;
+            }
         }
-        return out;
     } catch {
-        return defaults;
+        // Ignore storage errors
     }
+
+    const seeded = {};
+    try {
+        const legacyRaw = localStorage.getItem(LEGACY_ROSTER_KEY);
+        if (legacyRaw) {
+            const legacyArr = JSON.parse(legacyRaw);
+            if (Array.isArray(legacyArr) && legacyArr.some((c) => c && !/^TOOL-\d{3}$/.test(String(c)))) {
+                seeded["2026-11"] = normalize70List(legacyArr);
+            }
+        }
+    } catch {
+        // Ignore legacy errors
+    }
+    return seeded;
 }
 
-function saveRoster(roster) {
+function saveMonthRosterMap(mapObj) {
     try {
-        localStorage.setItem(ROSTER_STORAGE_KEY, JSON.stringify(roster.slice(0, TOTAL_PM_TOOLS)));
+        localStorage.setItem(MONTH_ROSTER_STORAGE_KEY, JSON.stringify(mapObj));
     } catch {
         // Ignore storage errors
     }
 }
 
-function loadExchangeMap() {
+function loadMonthExchangeMap() {
     try {
-        const raw = localStorage.getItem(EXCHANGE_STORAGE_KEY);
-        if (!raw) return {};
-        const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-        return {};
-    }
-}
-
-function saveExchangeMap(mapObj) {
-    try {
-        localStorage.setItem(EXCHANGE_STORAGE_KEY, JSON.stringify(mapObj));
+        const raw = localStorage.getItem(MONTH_EXCHANGE_STORAGE_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object") return parsed;
+        }
     } catch {
         // Ignore storage errors
     }
+
+    const seeded = {};
+    try {
+        const legacyExRaw = localStorage.getItem(LEGACY_EXCHANGE_KEY);
+        if (legacyExRaw) {
+            const parsedEx = JSON.parse(legacyExRaw);
+            if (parsedEx && typeof parsedEx === "object" && Object.keys(parsedEx).length) {
+                seeded["2026-11"] = parsedEx;
+            }
+        }
+    } catch {
+        // Ignore legacy errors
+    }
+    return seeded;
+}
+
+function saveMonthExchangeMap(mapObj) {
+    try {
+        localStorage.setItem(MONTH_EXCHANGE_STORAGE_KEY, JSON.stringify(mapObj));
+    } catch {
+        // Ignore storage errors
+    }
+}
+
+let activeYear = 2026;
+let activeMonthIdx = 10; // November
+let monthRosterMap = loadMonthRosterMap();
+let monthExchangeMap = loadMonthExchangeMap();
+
+function getRosterForMonth(year = activeYear, monthIdx = activeMonthIdx) {
+    const key = getMonthKey(year, monthIdx);
+    if (!monthRosterMap[key]) {
+        monthRosterMap[key] = createEmpty70Roster();
+    }
+    return monthRosterMap[key];
+}
+
+function getExchangeForMonth(year = activeYear, monthIdx = activeMonthIdx) {
+    const key = getMonthKey(year, monthIdx);
+    if (!monthExchangeMap[key] || typeof monthExchangeMap[key] !== "object") {
+        monthExchangeMap[key] = {};
+    }
+    return monthExchangeMap[key];
 }
 
 function loadMatrixState() {
@@ -202,10 +272,6 @@ function compressImageToDataUrl(file, maxWidth = 900, quality = 0.72) {
     });
 }
 
-let activeYear = 2026;
-let activeMonthIdx = 10; // November
-let roster70 = loadRoster();
-let exchangeMap = loadExchangeMap();
 let matrixState = loadMatrixState();
 
 // Modal state
@@ -221,6 +287,17 @@ function getDaysInMonth(year, monthIdx) {
 
 function makeIsoDate(year, monthIdx, day) {
     return `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function getActiveMonthPrefix() {
+    return `${getMonthKey(activeYear, activeMonthIdx)}-`;
+}
+
+function syncMonthPickerValue() {
+    const mp = document.getElementById("month-picker");
+    if (mp) {
+        mp.value = getMonthKey(activeYear, activeMonthIdx);
+    }
 }
 
 function parseDateTokenToIso(token, fallbackYear, fallbackMonthIdx) {
@@ -275,6 +352,7 @@ function formatIsoToShortDate(isoDate) {
 }
 
 function arrangeOcrTextToDateAndSr(rawOcrText) {
+    const currentRoster = getRosterForMonth(activeYear, activeMonthIdx);
     const lines = String(rawOcrText || "")
         .split(/\r?\n/)
         .map((l) => l.trim())
@@ -288,10 +366,10 @@ function arrangeOcrTextToDateAndSr(rawOcrText) {
         let resolvedCode = String(toolCode || "").trim().toUpperCase();
         let resolvedSr = Number(srNo) || 0;
 
-        if (!resolvedCode && resolvedSr >= 1 && resolvedSr <= roster70.length) {
-            resolvedCode = roster70[resolvedSr - 1];
+        if (!resolvedCode && resolvedSr >= 1 && resolvedSr <= currentRoster.length) {
+            resolvedCode = currentRoster[resolvedSr - 1];
         } else if (resolvedCode && !resolvedSr) {
-            const foundIdx = roster70.findIndex((c) => c === resolvedCode);
+            const foundIdx = currentRoster.findIndex((c) => c === resolvedCode);
             if (foundIdx !== -1) resolvedSr = foundIdx + 1;
         }
 
@@ -357,7 +435,8 @@ function arrangeOcrTextToDateAndSr(rawOcrText) {
     };
 }
 
-function parseArrangedOrBulkAssignments(text) {
+function parseArrangedOrBulkAssignments(text, targetYear = activeYear, targetMonthIdx = activeMonthIdx) {
+    const targetRoster = getRosterForMonth(targetYear, targetMonthIdx);
     const lines = String(text || "")
         .split(/\r?\n/)
         .map((l) => l.trim())
@@ -371,7 +450,7 @@ function parseArrangedOrBulkAssignments(text) {
         if (colonIdx !== -1) {
             const left = line.slice(0, colonIdx).trim();
             const right = line.slice(colonIdx + 1).trim();
-            const parsedDate = parseDateTokenToIso(left, activeYear, activeMonthIdx);
+            const parsedDate = parseDateTokenToIso(left, targetYear, targetMonthIdx);
             if (parsedDate) {
                 currentDate = parsedDate;
                 right.split(/[,;|]+/).forEach((part) => {
@@ -385,8 +464,8 @@ function parseArrangedOrBulkAssignments(text) {
                     const srOnlyMatch = p.match(/^sr\.?\s*(\d{1,2})$/i);
                     if (srOnlyMatch) {
                         const idx = Number(srOnlyMatch[1]) - 1;
-                        if (idx >= 0 && idx < roster70.length) {
-                            out.push({ isoDate: currentDate, toolCode: roster70[idx] });
+                        if (idx >= 0 && idx < targetRoster.length) {
+                            out.push({ isoDate: currentDate, toolCode: targetRoster[idx] });
                         }
                         return;
                     }
@@ -396,7 +475,7 @@ function parseArrangedOrBulkAssignments(text) {
             }
         }
 
-        const standaloneDate = parseDateTokenToIso(line, activeYear, activeMonthIdx);
+        const standaloneDate = parseDateTokenToIso(line, targetYear, targetMonthIdx);
         if (standaloneDate) {
             currentDate = standaloneDate;
             return;
@@ -413,22 +492,43 @@ function parseArrangedOrBulkAssignments(text) {
     return out;
 }
 
-function ensureToolInRoster(toolCode) {
+function ensureToolInMonthRoster(toolCode, year, monthIdx) {
     const upper = String(toolCode || "").trim().toUpperCase();
     if (!upper) return;
-    if (roster70.includes(upper)) return;
-    const placeholderIdx = roster70.findIndex((c) => /^TOOL-\d{3}$/.test(c));
+    const roster = getRosterForMonth(year, monthIdx);
+    if (roster.includes(upper)) return;
+    const placeholderIdx = roster.findIndex((c) => /^TOOL-\d{3}$/.test(c));
     if (placeholderIdx !== -1) {
-        roster70[placeholderIdx] = upper;
+        roster[placeholderIdx] = upper;
     }
 }
 
 function applyAssignmentsToMatrix(assignments, clearOldP) {
     if (!Array.isArray(assignments) || !assignments.length) return 0;
 
+    let firstIso = "";
+    assignments.forEach(({ isoDate }) => {
+        if (!firstIso && isoDate) firstIso = isoDate;
+    });
+
+    let targetYear = activeYear;
+    let targetMonthIdx = activeMonthIdx;
+    if (firstIso) {
+        const [yStr, mStr] = firstIso.split("-");
+        const y = Number(yStr);
+        const mIdx = Number(mStr) - 1;
+        if (y && mIdx >= 0 && mIdx <= 11) {
+            targetYear = y;
+            targetMonthIdx = mIdx;
+        }
+    }
+
+    const targetMonthPrefix = `${getMonthKey(targetYear, targetMonthIdx)}-`;
+
     if (clearOldP) {
         Object.keys(matrixState).forEach((k) => {
-            if (matrixState[k]) {
+            const datePart = k.split("__")[1] || "";
+            if (datePart.startsWith(targetMonthPrefix) && matrixState[k]) {
                 matrixState[k].p = false;
                 if (!matrixState[k].p && !matrixState[k].a && !matrixState[k].beforePhoto && !matrixState[k].afterPhoto && !matrixState[k].remark) {
                     delete matrixState[k];
@@ -438,12 +538,14 @@ function applyAssignmentsToMatrix(assignments, clearOldP) {
     }
 
     let appliedCount = 0;
-    let firstIso = "";
 
     assignments.forEach(({ isoDate, toolCode }) => {
         if (!isoDate || !toolCode) return;
-        if (!firstIso) firstIso = isoDate;
-        ensureToolInRoster(toolCode);
+        const [iy, im] = isoDate.split("-").map(Number);
+        const entryYear = iy || targetYear;
+        const entryMonthIdx = im ? im - 1 : targetMonthIdx;
+
+        ensureToolInMonthRoster(toolCode, entryYear, entryMonthIdx);
 
         const key = `${toolCode}__${isoDate}`;
         const existing = matrixState[key] || {
@@ -458,19 +560,11 @@ function applyAssignmentsToMatrix(assignments, clearOldP) {
         appliedCount += 1;
     });
 
-    if (firstIso) {
-        const [yStr, mStr] = firstIso.split("-");
-        const y = Number(yStr);
-        const mIdx = Number(mStr) - 1;
-        if (y && mIdx >= 0 && mIdx <= 11) {
-            activeYear = y;
-            activeMonthIdx = mIdx;
-            const mp = document.getElementById("month-picker");
-            if (mp) mp.value = `${yStr}-${mStr}`;
-        }
-    }
+    activeYear = targetYear;
+    activeMonthIdx = targetMonthIdx;
+    syncMonthPickerValue();
 
-    saveRoster(roster70);
+    saveMonthRosterMap(monthRosterMap);
     syncBackupAndMirror(matrixState);
     updateHeaderTitle();
     renderDateColumns();
@@ -523,13 +617,14 @@ async function runPlanPhotoOcr(file) {
 }
 
 function updateHeaderTitle() {
+    const roster = getRosterForMonth(activeYear, activeMonthIdx);
     const titleEl = document.getElementById("sheet-main-title");
     if (titleEl) {
         titleEl.textContent = `MOULD PREVENTIVE MAINTENANCE PLAN ${MONTHS_UPPER[activeMonthIdx]} - ${activeYear}`;
     }
     const badgeEl = document.getElementById("tool-count-badge");
     if (badgeEl) {
-        badgeEl.textContent = `${roster70.length} Tools`;
+        badgeEl.textContent = `${roster.length} Tools`;
     }
 }
 
@@ -544,12 +639,12 @@ function renderDateColumns() {
     const prefixCols = `
         <th class="sticky left-0 z-30 bg-[#0d1017] text-center py-1.5 text-stone-400">#</th>
         <th class="sticky left-12 z-30 bg-[#0d1017] px-3 py-1.5 text-left text-stone-400">
-            Mould Code
+            Tool No
         </th>
-        <th class="sticky left-[253px] z-30 bg-[#0d1017] px-3 py-1.5 text-left text-stone-400">
+        <th class="sticky left-[275px] z-30 bg-[#0d1017] px-3 py-1.5 text-left text-stone-400">
             Tool Exchange
         </th>
-        <th class="sticky left-[433px] z-30 bg-[#0d1017] px-2 py-1.5 text-center text-stone-400">
+        <th class="sticky left-[455px] z-30 bg-[#0d1017] px-2 py-1.5 text-center text-stone-400">
             Type
         </th>
     `;
@@ -566,6 +661,16 @@ function renderDateColumns() {
     headerRow.innerHTML = prefixCols + dateCols.join("");
 }
 
+function hasActivityInActiveMonth(code) {
+    const prefix = getActiveMonthPrefix();
+    return Object.entries(matrixState).some(([k, item]) => {
+        if (!item) return false;
+        const [toolCode, isoDate] = k.split("__");
+        if (toolCode !== code || !isoDate || !isoDate.startsWith(prefix)) return false;
+        return Boolean(item.p || item.a || item.beforePhoto || item.afterPhoto || item.remark);
+    });
+}
+
 function hasActivityOnDate(code, targetDate) {
     if (!targetDate) return true;
     const item = matrixState[`${code}__${targetDate}`];
@@ -574,23 +679,26 @@ function hasActivityOnDate(code, targetDate) {
 }
 
 function getFilteredRosterRows() {
+    const roster = getRosterForMonth(activeYear, activeMonthIdx);
+    const exchangeMap = getExchangeForMonth(activeYear, activeMonthIdx);
     const q = (document.getElementById("tool-search-input")?.value || "").trim().toLowerCase();
     const targetDate = (document.getElementById("date-search-input")?.value || "").trim();
 
-    const rows = roster70.map((code, i) => ({
+    const rows = roster.map((code, i) => ({
         srNo: i + 1,
         code,
         exchange: exchangeMap[String(i + 1)] || ""
     }));
 
     return rows.filter((r) => {
+        const isAssignedOrActive = !/^TOOL-\d{3}$/.test(r.code) || hasActivityInActiveMonth(r.code) || Boolean(r.exchange);
         const matchesQuery =
             !q ||
             String(r.srNo) === q ||
             r.code.toLowerCase().includes(q) ||
             r.exchange.toLowerCase().includes(q);
         const matchesDate = hasActivityOnDate(r.code, targetDate);
-        return matchesQuery && matchesDate;
+        return (q || targetDate || isAssignedOrActive) && matchesQuery && matchesDate;
     });
 }
 
@@ -605,7 +713,7 @@ function renderExcelGrid() {
         tbody.innerHTML = `
             <tr>
                 <td colspan="${totalDays + 4}" class="py-6 text-center text-stone-400">
-                    No matching tool numbers found.
+                    No tool entries for ${MONTHS_SHORT[activeMonthIdx]} ${activeYear}. Use Scan Plan, Bulk Text Plan, or Add Tool.
                 </td>
             </tr>
         `;
@@ -618,6 +726,9 @@ function renderExcelGrid() {
         const pCells = [];
         const aCells = [];
         const picCells = [];
+        const actionBlankCells = Array.from({ length: totalDays }, () => `
+            <td class="p-0 bg-[#0f131b]"></td>
+        `);
 
         for (let d = 1; d <= totalDays; d++) {
             const iso = makeIsoDate(activeYear, activeMonthIdx, d);
@@ -674,58 +785,98 @@ function renderExcelGrid() {
             `);
         }
 
+        // Row 1: Main Tool No & Tool Exchange row + P sub-grid row
         htmlRows.push(`
             <tr>
-                <td rowspan="3" class="sticky left-0 z-10 bg-[#11151d] py-1 px-2 text-center text-stone-300 font-bold align-middle">
+                <td rowspan="4" class="sticky left-0 z-10 bg-[#11151d] py-1 px-2 text-center text-stone-300 font-bold align-middle">
                     ${srNo}
                 </td>
-                <td rowspan="3" class="sticky left-12 z-10 bg-[#11151d] py-1 px-3 font-bold text-stone-100 whitespace-nowrap align-middle">
-                    <button
-                        type="button"
-                        onclick="editRosterTool(${srNo - 1})"
-                        class="text-left hover:text-amber-300 w-full truncate"
-                        title="Click to edit Tool Number #${srNo}"
-                    >
+                <td class="sticky left-12 z-10 bg-[#11151d] py-1 px-2.5 font-bold text-stone-100 align-middle min-w-[227px] max-w-[227px]">
+                    <span class="block truncate text-xs text-stone-100" title="${escapeAttr(code)}">
                         ${escapeAttr(code)}
-                    </button>
+                    </span>
                 </td>
-                <td rowspan="3" class="sticky left-[253px] z-10 bg-[#11151d] py-1 px-2.5 text-left align-middle max-w-[180px]">
-                    <div class="flex items-center justify-between gap-2">
-                        <span class="text-[11px] truncate ${exchange ? "text-amber-200 font-semibold" : "text-stone-500"}" title="${escapeAttr(exchange)}">
-                            ${exchange ? escapeAttr(exchange) : "—"}
-                        </span>
-                        <button
-                            type="button"
-                            onclick="editToolExchange(${srNo - 1})"
-                            class="shrink-0 px-1.5 py-0.5 rounded bg-stone-800 hover:bg-amber-400/20 border border-stone-600 hover:border-amber-400/60 text-[10px] text-amber-300 font-bold"
-                            title="Edit Tool Exchange for Sr #${srNo}"
-                        >
-                            Edit
-                        </button>
-                    </div>
+                <td class="sticky left-[275px] z-10 bg-[#11151d] py-1 px-2.5 text-left align-middle min-w-[180px] max-w-[180px]">
+                    <span class="block text-[11px] truncate ${exchange ? "text-amber-200 font-semibold" : "text-stone-500"}" title="${escapeAttr(exchange)}">
+                        ${exchange ? escapeAttr(exchange) : "—"}
+                    </span>
                 </td>
-                <td class="sticky left-[433px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-amber-300">
+                <td class="sticky left-[455px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-amber-300">
                     P
                 </td>
                 ${pCells.join("")}
             </tr>
         `);
 
+        // Row 2: Dedicated Edit / Delete row directly below Tool No & Tool Exchange + A sub-grid row
         htmlRows.push(`
             <tr>
-                <td class="sticky left-[433px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-emerald-300">
+                <td class="sticky left-12 z-10 bg-[#0f131b] py-1 px-2.5 align-middle min-w-[227px] max-w-[227px]">
+                    <div class="flex items-center gap-1.5">
+                        <button
+                            type="button"
+                            onclick="editRosterTool(${srNo - 1})"
+                            class="px-2 py-0.5 rounded bg-stone-800 hover:bg-amber-400/20 border border-stone-600 hover:border-amber-400/60 text-[10px] text-amber-300 font-bold"
+                            title="Edit Tool No for Sr #${srNo}"
+                        >
+                            Edit
+                        </button>
+                        <button
+                            type="button"
+                            onclick="deleteRosterTool(${srNo - 1})"
+                            class="px-2 py-0.5 rounded bg-stone-800 hover:bg-rose-500/20 border border-stone-600 hover:border-rose-500/60 text-[10px] text-rose-300 font-bold"
+                            title="Delete Tool No for Sr #${srNo}"
+                        >
+                            Delete
+                        </button>
+                    </div>
+                </td>
+                <td class="sticky left-[275px] z-10 bg-[#0f131b] py-1 px-2.5 align-middle min-w-[180px] max-w-[180px]">
+                    <div class="flex items-center gap-1.5">
+                        <button
+                            type="button"
+                            onclick="editToolExchange(${srNo - 1})"
+                            class="px-2 py-0.5 rounded bg-stone-800 hover:bg-amber-400/20 border border-stone-600 hover:border-amber-400/60 text-[10px] text-amber-300 font-bold"
+                            title="Edit Tool Exchange for Sr #${srNo}"
+                        >
+                            Edit
+                        </button>
+                        <button
+                            type="button"
+                            onclick="deleteToolExchange(${srNo - 1})"
+                            class="px-2 py-0.5 rounded bg-stone-800 hover:bg-rose-500/20 border border-stone-600 hover:border-rose-500/60 text-[10px] text-rose-300 font-bold"
+                            title="Delete Tool Exchange for Sr #${srNo}"
+                        >
+                            Delete
+                        </button>
+                    </div>
+                </td>
+                <td class="sticky left-[455px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-emerald-300">
                     A
                 </td>
                 ${aCells.join("")}
             </tr>
         `);
 
+        // Row 3: PIC sub-grid row
         htmlRows.push(`
-            <tr class="border-b-2 border-stone-600">
-                <td class="sticky left-[433px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-sky-300">
+            <tr>
+                <td rowspan="2" class="sticky left-12 z-10 bg-[#11151d]"></td>
+                <td rowspan="2" class="sticky left-[275px] z-10 bg-[#11151d]"></td>
+                <td class="sticky left-[455px] z-10 bg-[#151a24] px-2 py-0.5 text-center text-[10px] font-bold text-sky-300">
                     PIC
                 </td>
                 ${picCells.join("")}
+            </tr>
+        `);
+
+        // Row 4: Closing spacing/divider row to keep 4 sub-rows aligned
+        htmlRows.push(`
+            <tr class="border-b-2 border-stone-600">
+                <td class="sticky left-[455px] z-10 bg-[#0f131b] px-2 py-0.5 text-center text-[9px] text-stone-500">
+                    ACT
+                </td>
+                ${actionBlankCells.join("")}
             </tr>
         `);
     });
@@ -734,11 +885,13 @@ function renderExcelGrid() {
 }
 
 window.editToolExchange = function (index) {
-    if (index < 0 || index >= roster70.length) return;
+    const roster = getRosterForMonth(activeYear, activeMonthIdx);
+    if (index < 0 || index >= roster.length) return;
+    const exchangeMap = getExchangeForMonth(activeYear, activeMonthIdx);
     const srKey = String(index + 1);
     const current = exchangeMap[srKey] || "";
     const entered = window.prompt(
-        `Enter Tool Exchange for Sr. No ${index + 1} (${roster70[index]}):`,
+        `Enter Tool Exchange for Sr. No ${index + 1} (${roster[index]}):`,
         current
     );
     if (entered === null) return;
@@ -750,9 +903,24 @@ window.editToolExchange = function (index) {
         delete exchangeMap[srKey];
     }
 
-    saveExchangeMap(exchangeMap);
+    saveMonthExchangeMap(monthExchangeMap);
     renderExcelGrid();
     showToast(`Tool Exchange updated for Sr #${index + 1}`);
+};
+
+window.deleteToolExchange = function (index) {
+    const roster = getRosterForMonth(activeYear, activeMonthIdx);
+    if (index < 0 || index >= roster.length) return;
+    const exchangeMap = getExchangeForMonth(activeYear, activeMonthIdx);
+    const srKey = String(index + 1);
+    if (!exchangeMap[srKey]) {
+        showToast("No Tool Exchange to delete");
+        return;
+    }
+    delete exchangeMap[srKey];
+    saveMonthExchangeMap(monthExchangeMap);
+    renderExcelGrid();
+    showToast(`Deleted Tool Exchange for Sr #${index + 1}`);
 };
 
 window.toggleFlagCell = function (toolCode, isoDate, field) {
@@ -782,17 +950,20 @@ window.toggleFlagCell = function (toolCode, isoDate, field) {
 };
 
 window.editRosterTool = function (index) {
-    if (index < 0 || index >= roster70.length) return;
-    const current = roster70[index];
+    const roster = getRosterForMonth(activeYear, activeMonthIdx);
+    if (index < 0 || index >= roster.length) return;
+    const current = roster[index];
     const entered = window.prompt(`Enter Tool Number for Sr. No ${index + 1}:`, current);
     if (entered === null) return;
 
     const clean = entered.trim().toUpperCase();
     if (!clean || clean === current) return;
 
+    const monthPrefix = getActiveMonthPrefix();
+
     Object.keys(matrixState).forEach((k) => {
-        if (k.startsWith(`${current}__`)) {
-            const datePart = k.split("__")[1];
+        const [codePart, datePart] = k.split("__");
+        if (codePart === current && datePart && datePart.startsWith(monthPrefix)) {
             const val = matrixState[k];
             delete matrixState[k];
             matrixState[`${clean}__${datePart}`] = val;
@@ -807,11 +978,38 @@ window.editRosterTool = function (index) {
         }
     });
 
-    roster70[index] = clean;
-    saveRoster(roster70);
+    roster[index] = clean;
+    saveMonthRosterMap(monthRosterMap);
     syncBackupAndMirror(matrixState);
     renderExcelGrid();
     showToast(`Sr #${index + 1} updated to ${clean}`);
+};
+
+window.deleteRosterTool = function (index) {
+    const roster = getRosterForMonth(activeYear, activeMonthIdx);
+    if (index < 0 || index >= roster.length) return;
+    const current = roster[index];
+    const confirmed = window.confirm(`Delete Tool No "${current}" (Sr #${index + 1}) for ${MONTHS_SHORT[activeMonthIdx]} ${activeYear}?`);
+    if (!confirmed) return;
+
+    const monthPrefix = getActiveMonthPrefix();
+
+    Object.keys(matrixState).forEach((k) => {
+        const [codePart, datePart] = k.split("__");
+        if (codePart === current && datePart && datePart.startsWith(monthPrefix)) {
+            delete matrixState[k];
+        }
+    });
+
+    const exchangeMap = getExchangeForMonth(activeYear, activeMonthIdx);
+    delete exchangeMap[String(index + 1)];
+    saveMonthExchangeMap(monthExchangeMap);
+
+    roster[index] = createPlaceholderToolCode(index);
+    saveMonthRosterMap(monthRosterMap);
+    syncBackupAndMirror(matrixState);
+    renderExcelGrid();
+    showToast(`Deleted ${current} (Sr #${index + 1})`);
 };
 
 function syncPicModalUI() {
@@ -888,7 +1086,7 @@ function openLightbox(src) {
 function bindSignOff() {
     const prepEl = document.getElementById("prepared-by-input");
     const appEl = document.getElementById("approved-by-input");
-    const key = `ToolSyncPM_SignOff_${activeYear}-${String(activeMonthIdx + 1).padStart(2, "0")}`;
+    const key = `ToolSyncPM_SignOff_${getMonthKey(activeYear, activeMonthIdx)}`;
 
     try {
         const data = JSON.parse(localStorage.getItem(key) || "{}");
@@ -1001,7 +1199,7 @@ async function exportPmSheetToExcelWithPics() {
     workbook.creator = "ToolSync PM";
     workbook.created = new Date();
 
-    const monthTag = `${activeYear}-${String(activeMonthIdx + 1).padStart(2, "0")}`;
+    const monthTag = getMonthKey(activeYear, activeMonthIdx);
     const totalDays = getDaysInMonth(activeYear, activeMonthIdx);
     const rows = getFilteredRosterRows();
 
@@ -1033,7 +1231,7 @@ async function exportPmSheetToExcelWithPics() {
     });
 
     sheet.getColumn(1).width = 8;
-    sheet.getColumn(2).width = 24;
+    sheet.getColumn(2).width = 26;
     sheet.getColumn(3).width = 24;
     sheet.getColumn(4).width = 8;
     for (let c = 5; c <= totalCols; c++) {
@@ -1258,16 +1456,33 @@ async function exportPmSheetToExcelWithPics() {
 }
 
 function initFrontPageGrid() {
-    Object.keys(matrixState).forEach((k) => {
-        const code = (k.split("__")[0] || "").trim().toUpperCase();
-        if (code && !roster70.includes(code)) {
-            const slotIdx = roster70.findIndex((c) => /^TOOL-\d{3}$/.test(c));
-            if (slotIdx !== -1) {
-                roster70[slotIdx] = code;
-            }
+    const mpEl = document.getElementById("month-picker");
+    if (mpEl && mpEl.value && mpEl.value.includes("-")) {
+        const [yStr, mStr] = mpEl.value.split("-");
+        const y = Number(yStr);
+        const mIdx = Number(mStr) - 1;
+        if (y && mIdx >= 0 && mIdx <= 11) {
+            activeYear = y;
+            activeMonthIdx = mIdx;
+        }
+    } else {
+        syncMonthPickerValue();
+    }
+
+    Object.entries(matrixState).forEach(([k, entry]) => {
+        if (!entry) return;
+        const [code, isoDate] = k.split("__");
+        if (!code || !isoDate) return;
+        const [yStr, mStr] = isoDate.split("-");
+        const y = Number(yStr);
+        const mIdx = Number(mStr) - 1;
+        if (y && mIdx >= 0 && mIdx <= 11) {
+            ensureToolInMonthRoster(code.trim().toUpperCase(), y, mIdx);
         }
     });
-    saveRoster(roster70);
+
+    saveMonthRosterMap(monthRosterMap);
+    saveMonthExchangeMap(monthExchangeMap);
     syncBackupAndMirror(matrixState);
 
     updateHeaderTitle();
@@ -1302,7 +1517,7 @@ function initFrontPageGrid() {
     document.getElementById("apply-scanned-plan-btn")?.addEventListener("click", () => {
         const ta = document.getElementById("scan-arranged-textarea");
         const clearOldP = Boolean(document.getElementById("scan-replace-existing-p")?.checked);
-        const assignments = parseArrangedOrBulkAssignments(ta?.value || "");
+        const assignments = parseArrangedOrBulkAssignments(ta?.value || "", activeYear, activeMonthIdx);
         if (!assignments.length) {
             showToast("No valid date & tool/Sr entries found");
             return;
@@ -1328,7 +1543,7 @@ function initFrontPageGrid() {
     document.getElementById("apply-bulk-plan-btn")?.addEventListener("click", () => {
         const raw = document.getElementById("bulk-plan-textarea")?.value || "";
         const clearOldP = Boolean(document.getElementById("bulk-replace-existing-p")?.checked);
-        const assignments = parseArrangedOrBulkAssignments(raw);
+        const assignments = parseArrangedOrBulkAssignments(raw, activeYear, activeMonthIdx);
         if (!assignments.length) {
             showToast("No valid date + mould lines found");
             return;
@@ -1362,8 +1577,7 @@ function initFrontPageGrid() {
             if (y && mIdx >= 0 && mIdx <= 11 && (y !== activeYear || mIdx !== activeMonthIdx)) {
                 activeYear = y;
                 activeMonthIdx = mIdx;
-                const mp = document.getElementById("month-picker");
-                if (mp) mp.value = `${yStr}-${mStr}`;
+                syncMonthPickerValue();
                 updateHeaderTitle();
                 renderDateColumns();
                 bindSignOff();
@@ -1391,11 +1605,16 @@ function initFrontPageGrid() {
 
         if (!toolVal) return;
 
+        const [dy, dm] = dateVal.split("-").map(Number);
+        const targetY = dy || activeYear;
+        const targetMIdx = dm ? dm - 1 : activeMonthIdx;
+        const targetRoster = getRosterForMonth(targetY, targetMIdx);
+
         if (srVal >= 1 && srVal <= TOTAL_PM_TOOLS) {
-            roster70[srVal - 1] = toolVal;
-        } else if (!roster70.includes(toolVal)) {
-            const emptyIdx = roster70.findIndex((c) => /^TOOL-\d{3}$/.test(c));
-            roster70[emptyIdx !== -1 ? emptyIdx : TOTAL_PM_TOOLS - 1] = toolVal;
+            targetRoster[srVal - 1] = toolVal;
+        } else if (!targetRoster.includes(toolVal)) {
+            const emptyIdx = targetRoster.findIndex((c) => /^TOOL-\d{3}$/.test(c));
+            targetRoster[emptyIdx !== -1 ? emptyIdx : TOTAL_PM_TOOLS - 1] = toolVal;
         }
 
         const key = `${toolVal}__${dateVal}`;
@@ -1407,16 +1626,12 @@ function initFrontPageGrid() {
         }
         matrixState[key] = prev;
 
-        saveRoster(roster70);
+        saveMonthRosterMap(monthRosterMap);
         syncBackupAndMirror(matrixState);
 
-        const [dy, dm] = dateVal.split("-").map(Number);
-        if (dy && dm) {
-            activeYear = dy;
-            activeMonthIdx = dm - 1;
-            const mp = document.getElementById("month-picker");
-            if (mp) mp.value = `${dy}-${String(dm).padStart(2, "0")}`;
-        }
+        activeYear = targetY;
+        activeMonthIdx = targetMIdx;
+        syncMonthPickerValue();
 
         document.getElementById("new-tool-number").value = "";
         document.getElementById("new-tool-sr").value = "";
