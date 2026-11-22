@@ -15,39 +15,6 @@ const PHOTO_BACKUP_KEY = "ToolSyncPM_PhotoBackup_v1";
 const ONLY_PIC_BACKUP_KEY = "ToolSyncPM_Only_Pic_Backup_v1";
 const SHARED_TOOLS_MIRROR_KEY = "ToolSyncPM_Tools_v1";
 
-const INITIAL_30_TOOLS = [
-    "145W410441-00202",
-    "145W410461-00201",
-    "145W410441-00207",
-    "521140-007 OLD",
-    "521185-003",
-    "525024-001",
-    "531686-004",
-    "531686-005",
-    "531856-002",
-    "531866-001",
-    "531890-001",
-    "531890-008",
-    "531898-001",
-    "531898-002",
-    "532046-003",
-    "541047-001",
-    "541048-001",
-    "541405-003",
-    "145W410522-00002",
-    "145W410551-00011",
-    "145W410551-00010",
-    "145W410524-00005",
-    "145W410524-00007",
-    "145W330142-00008",
-    "145W330142-00006",
-    "145W311097-00003",
-    "145W330160-00001",
-    "145W330160-00019",
-    "145W330160-00006",
-    "145W330160-00027"
-];
-
 function escapeAttr(str) {
     return String(str || "")
         .replace(/&/g, "&amp;")
@@ -73,7 +40,7 @@ function showToast(msg) {
 function createDefault70Roster() {
     const list = [];
     for (let i = 1; i <= TOTAL_PM_TOOLS; i++) {
-        list.push(INITIAL_30_TOOLS[i - 1] || `TOOL-${String(i).padStart(3, "0")}`);
+        list.push(`TOOL-${String(i).padStart(3, "0")}`);
     }
     return list;
 }
@@ -1352,9 +1319,9 @@ function initFrontPageGrid() {
         const ta = document.getElementById("bulk-plan-textarea");
         if (!ta) return;
         ta.value = [
-            "2/Nov: 145W410441-00202, 145W410461-00201, 145W410441-00207",
-            "3/Nov: 521140-007 OLD, 521185-003, 525024-001",
-            "4/Nov: 531686-004, 531686-005, 531856-002"
+            "2/Nov: TOOL-001, TOOL-002, TOOL-003",
+            "3/Nov: TOOL-004, TOOL-005, TOOL-006",
+            "4/Nov: TOOL-007, TOOL-008, TOOL-009"
         ].join("\n");
     });
 
