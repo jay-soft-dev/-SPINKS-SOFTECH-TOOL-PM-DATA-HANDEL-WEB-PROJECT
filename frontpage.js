@@ -141,6 +141,7 @@ function saveMonthExchangeMap(mapObj) {
 
 let activeYear = 2026;
 let activeMonthIdx = 10; // November
+let preSearchMonth = null;
 let monthRosterMap = loadMonthRosterMap();
 let monthExchangeMap = loadMonthExchangeMap();
 
@@ -245,8 +246,10 @@ function syncBackupAndMirror(stateObj) {
 
         localStorage.setItem(SHARED_TOOLS_MIRROR_KEY, JSON.stringify(mirrorList));
         localStorage.setItem(PHOTO_BACKUP_KEY, JSON.stringify(backupPhotos));
+        return true;
     } catch {
-        // Ignore storage quota errors
+        showToast("Browser storage limit reached! Export JSON backup & clear old photos.");
+        return false;
     }
 }
 
@@ -297,6 +300,160 @@ function syncMonthPickerValue() {
     const mp = document.getElementById("month-picker");
     if (mp) {
         mp.value = getMonthKey(activeYear, activeMonthIdx);
+    }
+}
+
+function collectAllSignOffs() {
+    const signOffs = {};
+    try {
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith("ToolSyncPM_SignOff_")) {
+                const tag = k.replace("ToolSyncPM_SignOff_", "");
+                signOffs[tag] = JSON.parse(localStorage.getItem(k) || "{}");
+            }
+        }
+    } catch {
+        // Ignore sign-off scan errors
+    }
+    return signOffs;
+}
+
+function restoreAllSignOffs(signOffs) {
+    if (!signOffs || typeof signOffs !== "object") return;
+    Object.entries(signOffs).forEach(([tag, val]) => {
+        if (!tag || !val || typeof val !== "object") return;
+        try {
+            localStorage.setItem(`ToolSyncPM_SignOff_${tag}`, JSON.stringify(val));
+        } catch {
+            // Ignore write errors
+        }
+    });
+}
+
+function exportFullJsonBackup() {
+    const now = new Date();
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}-${String(now.getMinutes()).padStart(2, "0")}`;
+
+    const payload = {
+        app: "ToolSyncPM",
+        version: 2,
+        exportedAt: now.toISOString(),
+        activeView: {
+            year: activeYear,
+            monthIdx: activeMonthIdx
+        },
+        monthRosterMap,
+        monthExchangeMap,
+        matrixState,
+        signOffs: collectAllSignOffs()
+    };
+
+    const jsonStr = JSON.stringify(payload, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `ToolSyncPM_Backup_${stamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    showToast("Full JSON backup downloaded!");
+}
+
+function importFullJsonBackupFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+        try {
+            const parsed = JSON.parse(String(reader.result || "{}"));
+            if (!parsed || typeof parsed !== "object" || (!parsed.matrixState && !parsed.monthRosterMap)) {
+                showToast("Invalid ToolSyncPM backup file");
+                return;
+            }
+
+            if (parsed.monthRosterMap && typeof parsed.monthRosterMap === "object") {
+                const cleaned = {};
+                Object.entries(parsed.monthRosterMap).forEach(([mKey, list]) => {
+                    cleaned[mKey] = normalize70List(list);
+                });
+                monthRosterMap = cleaned;
+                saveMonthRosterMap(monthRosterMap);
+            }
+
+            if (parsed.monthExchangeMap && typeof parsed.monthExchangeMap === "object") {
+                monthExchangeMap = parsed.monthExchangeMap;
+                saveMonthExchangeMap(monthExchangeMap);
+            }
+
+            if (parsed.matrixState && typeof parsed.matrixState === "object") {
+                matrixState = parsed.matrixState;
+                syncBackupAndMirror(matrixState);
+            }
+
+            if (parsed.signOffs && typeof parsed.signOffs === "object") {
+                restoreAllSignOffs(parsed.signOffs);
+            }
+
+            if (parsed.activeView && typeof parsed.activeView.year === "number" && typeof parsed.activeView.monthIdx === "number") {
+                activeYear = parsed.activeView.year;
+                activeMonthIdx = parsed.activeView.monthIdx;
+                syncMonthPickerValue();
+            }
+
+            preSearchMonth = null;
+            updateHeaderTitle();
+            renderDateColumns();
+            renderExcelGrid();
+            bindSignOff();
+            showToast("Backup restored successfully!");
+        } catch {
+            showToast("Could not read JSON backup file");
+        }
+    };
+    reader.readAsText(file);
+}
+
+function ensureBackupControlsInToolbar() {
+    if (document.getElementById("export-json-backup-btn")) return;
+
+    const anchorBtn = document.getElementById("export-excel-btn");
+    const container = anchorBtn?.parentElement;
+    if (!container) return;
+
+    const exportBtn = document.createElement("button");
+    exportBtn.type = "button";
+    exportBtn.id = "export-json-backup-btn";
+    exportBtn.className = "px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition";
+    exportBtn.textContent = "Backup JSON";
+    exportBtn.title = "Download complete JSON backup (plans, tools, photos)";
+    exportBtn.addEventListener("click", exportFullJsonBackup);
+
+    const importLabel = document.createElement("label");
+    importLabel.className = "cursor-pointer px-3 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-600 text-stone-100 text-xs font-bold transition inline-flex items-center";
+    importLabel.title = "Restore data from a saved JSON backup file";
+    importLabel.textContent = "Restore JSON";
+
+    const importInput = document.createElement("input");
+    importInput.type = "file";
+    importInput.accept = ".json,application/json";
+    importInput.id = "import-json-backup-input";
+    importInput.className = "hidden";
+    importInput.addEventListener("change", (e) => {
+        const f = e.target.files?.[0];
+        if (f) importFullJsonBackupFile(f);
+        e.target.value = "";
+    });
+
+    importLabel.appendChild(importInput);
+
+    if (anchorBtn && anchorBtn.nextSibling) {
+        container.insertBefore(exportBtn, anchorBtn.nextSibling);
+        container.insertBefore(importLabel, exportBtn.nextSibling);
+    } else {
+        container.appendChild(exportBtn);
+        container.appendChild(importLabel);
     }
 }
 
@@ -512,7 +669,6 @@ function clampDayToMonth(year, monthIdx, dayNum) {
 function applyAssignmentsToMatrix(assignments, clearOldP) {
     if (!Array.isArray(assignments) || !assignments.length) return 0;
 
-    // Keep user's selected month/year locked so applying a plan never jumps back to November
     const targetYear = activeYear;
     const targetMonthIdx = activeMonthIdx;
     const targetMonthPrefix = `${getMonthKey(targetYear, targetMonthIdx)}-`;
@@ -650,14 +806,18 @@ function renderDateColumns() {
     headerRow.innerHTML = prefixCols + dateCols.join("");
 }
 
-function hasActivityInActiveMonth(code) {
-    const prefix = getActiveMonthPrefix();
+function hasActivityInMonth(code, year, monthIdx) {
+    const prefix = `${getMonthKey(year, monthIdx)}-`;
     return Object.entries(matrixState).some(([k, item]) => {
         if (!item) return false;
         const [toolCode, isoDate] = k.split("__");
         if (toolCode !== code || !isoDate || !isoDate.startsWith(prefix)) return false;
         return Boolean(item.p || item.a || item.beforePhoto || item.afterPhoto || item.remark);
     });
+}
+
+function hasActivityInActiveMonth(code) {
+    return hasActivityInMonth(code, activeYear, activeMonthIdx);
 }
 
 function hasActivityOnDate(code, targetDate) {
@@ -667,27 +827,159 @@ function hasActivityOnDate(code, targetDate) {
     return Boolean(item.p || item.a || item.beforePhoto || item.afterPhoto || item.remark);
 }
 
+function getAll12MonthKeysForYear(year) {
+    return Array.from({ length: 12 }, (_, mIdx) => ({
+        year,
+        monthIdx: mIdx,
+        monthKey: getMonthKey(year, mIdx)
+    }));
+}
+
+function rowMatchesQuery(rowObj, q) {
+    if (!q) return true;
+    return (
+        String(rowObj.srNo) === q ||
+        rowObj.code.toLowerCase().includes(q) ||
+        rowObj.exchange.toLowerCase().includes(q) ||
+        rowObj.monthKey.toLowerCase().includes(q)
+    );
+}
+
+function handleCrossMonthSearchSwitch(q) {
+    if (!q) {
+        if (preSearchMonth) {
+            activeYear = preSearchMonth.year;
+            activeMonthIdx = preSearchMonth.monthIdx;
+            preSearchMonth = null;
+            syncMonthPickerValue();
+            updateHeaderTitle();
+            renderDateColumns();
+            bindSignOff();
+        }
+        return;
+    }
+
+    const activeRoster = getRosterForMonth(activeYear, activeMonthIdx);
+    const activeExchange = getExchangeForMonth(activeYear, activeMonthIdx);
+    const activeKey = getMonthKey(activeYear, activeMonthIdx);
+
+    const hasMatchInActive = activeRoster.some((code, idx) =>
+        rowMatchesQuery(
+            { srNo: idx + 1, code, exchange: activeExchange[String(idx + 1)] || "", monthKey: activeKey },
+            q
+        )
+    );
+
+    if (hasMatchInActive) return;
+
+    const candidateMonths = getAll12MonthKeysForYear(activeYear);
+    Object.keys(monthRosterMap).forEach((mKey) => {
+        if (!candidateMonths.some((m) => m.monthKey === mKey)) {
+            const [yStr, mStr] = mKey.split("-");
+            const y = Number(yStr);
+            const mIdx = Number(mStr) - 1;
+            if (y && mIdx >= 0 && mIdx <= 11) {
+                candidateMonths.push({ year: y, monthIdx: mIdx, monthKey: mKey });
+            }
+        }
+    });
+
+    for (const cand of candidateMonths) {
+        const rList = getRosterForMonth(cand.year, cand.monthIdx);
+        const exMap = getExchangeForMonth(cand.year, cand.monthIdx);
+        const found = rList.some((code, idx) =>
+            rowMatchesQuery(
+                { srNo: idx + 1, code, exchange: exMap[String(idx + 1)] || "", monthKey: cand.monthKey },
+                q
+            )
+        );
+        if (found) {
+            if (!preSearchMonth) {
+                preSearchMonth = { year: activeYear, monthIdx: activeMonthIdx };
+            }
+            activeYear = cand.year;
+            activeMonthIdx = cand.monthIdx;
+            syncMonthPickerValue();
+            updateHeaderTitle();
+            renderDateColumns();
+            bindSignOff();
+            break;
+        }
+    }
+}
+
 function getFilteredRosterRows() {
-    const roster = getRosterForMonth(activeYear, activeMonthIdx);
-    const exchangeMap = getExchangeForMonth(activeYear, activeMonthIdx);
     const q = (document.getElementById("tool-search-input")?.value || "").trim().toLowerCase();
     const targetDate = (document.getElementById("date-search-input")?.value || "").trim();
+
+    if (q) {
+        const activeRoster = getRosterForMonth(activeYear, activeMonthIdx);
+        const activeExchange = getExchangeForMonth(activeYear, activeMonthIdx);
+        const activeKey = getMonthKey(activeYear, activeMonthIdx);
+
+        const currentMatches = activeRoster
+            .map((code, i) => ({
+                srNo: i + 1,
+                code,
+                exchange: activeExchange[String(i + 1)] || "",
+                monthKey: activeKey,
+                monthLabel: `${MONTHS_SHORT[activeMonthIdx]} ${activeYear}`
+            }))
+            .filter((r) => rowMatchesQuery(r, q) && hasActivityOnDate(r.code, targetDate));
+
+        if (currentMatches.length) {
+            return currentMatches;
+        }
+
+        const allMonthMatches = [];
+        const allMonths = getAll12MonthKeysForYear(activeYear);
+        Object.keys(monthRosterMap).forEach((mKey) => {
+            if (!allMonths.some((m) => m.monthKey === mKey)) {
+                const [yStr, mStr] = mKey.split("-");
+                const y = Number(yStr);
+                const mIdx = Number(mStr) - 1;
+                if (y && mIdx >= 0 && mIdx <= 11) {
+                    allMonths.push({ year: y, monthIdx: mIdx, monthKey: mKey });
+                }
+            }
+        });
+
+        allMonths.forEach((mObj) => {
+            const rList = getRosterForMonth(mObj.year, mObj.monthIdx);
+            const exMap = getExchangeForMonth(mObj.year, mObj.monthIdx);
+            rList.forEach((code, i) => {
+                const candidateRow = {
+                    srNo: i + 1,
+                    code,
+                    exchange: exMap[String(i + 1)] || "",
+                    monthKey: mObj.monthKey,
+                    monthLabel: `${MONTHS_SHORT[mObj.monthIdx]} ${mObj.year}`
+                };
+                if (rowMatchesQuery(candidateRow, q) && hasActivityOnDate(candidateRow.code, targetDate)) {
+                    allMonthMatches.push(candidateRow);
+                }
+            });
+        });
+
+        return allMonthMatches;
+    }
+
+    const roster = getRosterForMonth(activeYear, activeMonthIdx);
+    const exchangeMap = getExchangeForMonth(activeYear, activeMonthIdx);
+    const activeKey = getMonthKey(activeYear, activeMonthIdx);
 
     const rows = roster.map((code, i) => ({
         srNo: i + 1,
         code,
-        exchange: exchangeMap[String(i + 1)] || ""
+        exchange: exchangeMap[String(i + 1)] || "",
+        monthKey: activeKey,
+        monthLabel: `${MONTHS_SHORT[activeMonthIdx]} ${activeYear}`
     }));
 
     return rows.filter((r) => {
         const isAssignedOrActive = !/^TOOL-\d{3}$/.test(r.code) || hasActivityInActiveMonth(r.code) || Boolean(r.exchange);
-        const matchesQuery =
-            !q ||
-            String(r.srNo) === q ||
-            r.code.toLowerCase().includes(q) ||
-            r.exchange.toLowerCase().includes(q);
         const matchesDate = hasActivityOnDate(r.code, targetDate);
-        return (q || targetDate || isAssignedOrActive) && matchesQuery && matchesDate;
+        return (targetDate || isAssignedOrActive) && matchesDate;
     });
 }
 
@@ -702,7 +994,7 @@ function renderExcelGrid() {
         tbody.innerHTML = `
             <tr>
                 <td colspan="${totalDays + 4}" class="py-6 text-center text-stone-400">
-                    No tool entries for ${MONTHS_SHORT[activeMonthIdx]} ${activeYear}. Use Scan Plan, Bulk Text Plan, or Add Tool.
+                    No tool entries found across months for this filter. Use Scan Plan, Bulk Text Plan, or Add Tool.
                 </td>
             </tr>
         `;
@@ -711,7 +1003,7 @@ function renderExcelGrid() {
 
     const htmlRows = [];
 
-    rows.forEach(({ srNo, code, exchange }) => {
+    rows.forEach(({ srNo, code, exchange, monthLabel }) => {
         const pCells = [];
         const aCells = [];
         const picCells = [];
@@ -774,16 +1066,22 @@ function renderExcelGrid() {
             `);
         }
 
-        // Row 1: Main Tool No & Tool Exchange row + P sub-grid row
+        const monthBadge = monthLabel
+            ? `<span class="ml-1.5 px-1.5 py-0.5 rounded bg-sky-500/15 border border-sky-500/40 text-[9px] text-sky-300 font-semibold">${escapeAttr(monthLabel)}</span>`
+            : "";
+
         htmlRows.push(`
             <tr>
                 <td rowspan="4" class="sticky left-0 z-10 bg-[#11151d] py-1 px-2 text-center text-stone-300 font-bold align-middle">
                     ${srNo}
                 </td>
                 <td class="sticky left-12 z-10 bg-[#11151d] py-1 px-2.5 font-bold text-stone-100 align-middle min-w-[227px] max-w-[227px]">
-                    <span class="block truncate text-xs text-stone-100" title="${escapeAttr(code)}">
-                        ${escapeAttr(code)}
-                    </span>
+                    <div class="flex items-center justify-between gap-1">
+                        <span class="truncate text-xs text-stone-100" title="${escapeAttr(code)}">
+                            ${escapeAttr(code)}
+                        </span>
+                        ${monthBadge}
+                    </div>
                 </td>
                 <td class="sticky left-[275px] z-10 bg-[#11151d] py-1 px-2.5 text-left align-middle min-w-[180px] max-w-[180px]">
                     <span class="block text-[11px] truncate ${exchange ? "text-amber-200 font-semibold" : "text-stone-500"}" title="${escapeAttr(exchange)}">
@@ -797,7 +1095,6 @@ function renderExcelGrid() {
             </tr>
         `);
 
-        // Row 2: Dedicated Edit / Delete row directly below Tool No & Tool Exchange + A sub-grid row
         htmlRows.push(`
             <tr>
                 <td class="sticky left-12 z-10 bg-[#0f131b] py-1 px-2.5 align-middle min-w-[227px] max-w-[227px]">
@@ -847,7 +1144,6 @@ function renderExcelGrid() {
             </tr>
         `);
 
-        // Row 3: PIC sub-grid row
         htmlRows.push(`
             <tr>
                 <td rowspan="2" class="sticky left-12 z-10 bg-[#11151d]"></td>
@@ -859,7 +1155,6 @@ function renderExcelGrid() {
             </tr>
         `);
 
-        // Row 4: Closing spacing/divider row to keep 4 sub-rows aligned
         htmlRows.push(`
             <tr class="border-b-2 border-stone-600">
                 <td class="sticky left-[455px] z-10 bg-[#0f131b] px-2 py-0.5 text-center text-[9px] text-stone-500">
@@ -1445,6 +1740,8 @@ async function exportPmSheetToExcelWithPics() {
 }
 
 function initFrontPageGrid() {
+    ensureBackupControlsInToolbar();
+
     const mpEl = document.getElementById("month-picker");
     if (mpEl && mpEl.value && mpEl.value.includes("-")) {
         const [yStr, mStr] = mpEl.value.split("-");
@@ -1547,6 +1844,7 @@ function initFrontPageGrid() {
     document.getElementById("month-picker")?.addEventListener("change", (e) => {
         const val = e.target.value;
         if (!val || !val.includes("-")) return;
+        preSearchMonth = null;
         const [yStr, mStr] = val.split("-");
         activeYear = Number(yStr);
         activeMonthIdx = Number(mStr) - 1;
@@ -1556,7 +1854,11 @@ function initFrontPageGrid() {
         bindSignOff();
     });
 
-    document.getElementById("tool-search-input")?.addEventListener("input", renderExcelGrid);
+    document.getElementById("tool-search-input")?.addEventListener("input", (e) => {
+        const q = (e.target.value || "").trim().toLowerCase();
+        handleCrossMonthSearchSwitch(q);
+        renderExcelGrid();
+    });
 
     document.getElementById("date-search-input")?.addEventListener("change", (e) => {
         const val = e.target.value;
@@ -1565,6 +1867,7 @@ function initFrontPageGrid() {
             const y = Number(yStr);
             const mIdx = Number(mStr) - 1;
             if (y && mIdx >= 0 && mIdx <= 11 && (y !== activeYear || mIdx !== activeMonthIdx)) {
+                preSearchMonth = null;
                 activeYear = y;
                 activeMonthIdx = mIdx;
                 syncMonthPickerValue();
@@ -1619,6 +1922,7 @@ function initFrontPageGrid() {
         saveMonthRosterMap(monthRosterMap);
         syncBackupAndMirror(matrixState);
 
+        preSearchMonth = null;
         activeYear = targetY;
         activeMonthIdx = targetMIdx;
         syncMonthPickerValue();
@@ -1697,10 +2001,12 @@ function initFrontPageGrid() {
             });
         }
 
-        syncBackupAndMirror(matrixState);
+        const savedOk = syncBackupAndMirror(matrixState);
         renderExcelGrid();
         closePicModal();
-        showToast(`Saved photos for ${activePicTool} (${activePicDate})`);
+        if (savedOk) {
+            showToast(`Saved photos for ${activePicTool} (${activePicDate})`);
+        }
     });
 }
 
