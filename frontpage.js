@@ -246,23 +246,6 @@ function syncBackupAndMirror(stateObj) {
 
         localStorage.setItem(SHARED_TOOLS_MIRROR_KEY, JSON.stringify(mirrorList));
         localStorage.setItem(PHOTO_BACKUP_KEY, JSON.stringify(backupPhotos));
-
-        if (window.toolSyncCloud && typeof window.toolSyncCloud.save === "function") {
-            window.toolSyncCloud.save(
-                {
-                    version: 2,
-                    year: activeYear,
-                    month: activeMonthIdx,
-                    monthRosterMap,
-                    monthExchangeMap,
-                    matrixState
-                },
-                (reason, bytes) => {
-                    showToast(`Size (${Math.round(bytes / 1024)} KB) / cloud issue (${reason}) — JSON auto-downloaded!`);
-                }
-            );
-        }
-
         return true;
     } catch {
         showToast("Browser storage limit reached! Export JSON backup & clear old photos.");
@@ -1792,42 +1775,6 @@ function initFrontPageGrid() {
     renderDateColumns();
     renderExcelGrid();
     bindSignOff();
-
-    if (window.toolSyncCloud && typeof window.toolSyncCloud.load === "function") {
-        window.toolSyncCloud.load().then((cloudData) => {
-            if (!cloudData) return;
-            let changed = false;
-
-            if (cloudData.monthRosterMap && typeof cloudData.monthRosterMap === "object") {
-                const cleanedRoster = {};
-                Object.entries(cloudData.monthRosterMap).forEach(([mKey, list]) => {
-                    cleanedRoster[mKey] = normalize70List(list);
-                });
-                monthRosterMap = cleanedRoster;
-                saveMonthRosterMap(monthRosterMap);
-                changed = true;
-            }
-
-            if (cloudData.monthExchangeMap && typeof cloudData.monthExchangeMap === "object") {
-                monthExchangeMap = cloudData.monthExchangeMap;
-                saveMonthExchangeMap(monthExchangeMap);
-                changed = true;
-            }
-
-            if (cloudData.matrixState && typeof cloudData.matrixState === "object") {
-                matrixState = cloudData.matrixState;
-                localStorage.setItem(MATRIX_STATE_KEY, JSON.stringify(matrixState));
-                changed = true;
-            }
-
-            if (changed) {
-                updateHeaderTitle();
-                renderDateColumns();
-                renderExcelGrid();
-                bindSignOff();
-            }
-        });
-    }
 
     document.getElementById("toggle-scan-plan-btn")?.addEventListener("click", () => {
         document.getElementById("scan-plan-panel")?.classList.toggle("hidden");
